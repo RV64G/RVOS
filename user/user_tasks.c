@@ -1,6 +1,8 @@
 #include "uapi/printf.h"
 #include "syscalls.h" // 使用新的系统调用声明
 #include "uapi/user_tasks.h"
+#include "string.h"
+#include <stdint.h> // 为了使用 intptr_t
 
 void user_task0(void *param)
 {
@@ -24,7 +26,7 @@ void user_task1(void *param)
 
 void user_task(void *param)
 {
-	int task_id = (int)param;
+	int task_id = (int)(intptr_t)param; // 安全地从指针转换为整数
 	printf("Task %d: Created!\n", task_id);
 	int iter_cnt = task_id;
 	while (1)

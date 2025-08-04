@@ -37,7 +37,8 @@ struct context
 	reg_t s11;
 	reg_t t3;
 	reg_t t4;
-	reg_t t5;	reg_t t6;
+	reg_t t5;
+	reg_t t6;
 	// upon is trap frame
 	// save the pc to run in next schedule cycle
 	reg_t pc;	   // offset: 31 * 8 = 248 (64-bit)
@@ -73,6 +74,7 @@ struct task_struct
 /* scheduler functions */
 void sched_init(void);
 void schedule(void);
+void kernel_scheduler(void);
 int task_create(void (*start_routin)(void *param), void *param, uint8_t priority, uint32_t timeslice);
 void task_delay(uint32_t ticks);
 void task_yield(void);

@@ -19,7 +19,7 @@ GDB     = gdb-multiarch
 CFLAGS_BASE = -nostdlib -fno-builtin -march=rv64gc_zbb -mabi=lp64d -mcmodel=medany -g
 
 # Stricter warnings for the 'wall' target
-CFLAGS_WARN_STRICT = -Wall -Wextra -Werror -Wshadow -Wpointer-arith -Wcast-qual -Wmissing-prototypes -Wformat=2 -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function
+CFLAGS_WARN_STRICT = -Wall -Wextra -Werror -Wformat=2 -Wformat-security -Wlogical-op -Wmissing-prototypes -Wstrict-prototypes -Wold-style-definition -Wmissing-declarations -Wpointer-arith -Wwrite-strings -Wcast-qual -Wcast-align -Wshadow -Wredundant-decls -Wnested-externs -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function
 
 # Includes
 INCLUDES = -I include

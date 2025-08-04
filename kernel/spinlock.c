@@ -1,80 +1,61 @@
-#include "kernel.h"
+#include <kernel/spinlock.h>
+#include <arch/riscv.h>
+#include <kernel/printk.h>
 
-/* Simple interrupt-based locking for S-mode
- * This is not a true spinlock but provides basic mutual exclusion
- * by disabling interrupts during critical sections */
+// Uncomment the following line to enable spinlock debugging
+// #define DEBUG_SPINLOCK
 
-int spin_lock()
+void spinlock_init(struct spinlock *lock, char *name)
 {
-	/* Disable supervisor interrupts */
-	w_sstatus(r_sstatus() & ~SSTATUS_SIE);
-	return 0;
+	lock->locked = 0;
+#ifdef DEBUG_SPINLOCK
+	lock->name = name;
+	lock->hartid = -1;
+#endif
 }
 
-int spin_unlock()
+// Acquire the lock.
+// Loops (spins) until the lock is acquired.
+void spinlock_acquire(struct spinlock *lock)
 {
-	/* Enable supervisor interrupts */
-	w_sstatus(r_sstatus() | SSTATUS_SIE);
-	return 0;
+	lock->old_sstatus = push_off(); // disable interrupts to avoid deadlock.
+	
+#ifdef DEBUG_SPINLOCK
+	if (lock->locked && lock->hartid == r_hartid()) {
+		panic("spinlock %s: re-acquisition", lock->name);
+	}
+#endif
+
+	// On RISC-V, amoswap.w.aq reads the old value from lock->locked and writes 1 into it.
+	// The ".aq" (acquire) memory ordering semantics prevent subsequent memory accesses
+	// from being reordered before this one.
+	// This is a Test-and-Test-and-Set (TTAS) lock.
+	while (__sync_lock_test_and_set(&lock->locked, 1) != 0) {
+		while(lock->locked) {
+			spin_loop_hint();
+		}
+	}
+
+#ifdef DEBUG_SPINLOCK
+	// Record info about lock acquisition for debugging.
+	lock->hartid = r_hartid();
+#endif
 }
 
-/* Simplest option: No-op locks for debugging
- * Uncomment these and comment out the interrupt-based locks above
- * if you want to completely disable locking during initial testing */
-
-/*
-int spin_lock()
+// Release the lock.
+void spinlock_release(struct spinlock *lock)
 {
-    // No-op for debugging
-    return 0;
+#ifdef DEBUG_SPINLOCK
+	if (!lock->locked || lock->hartid != r_hartid()) {
+		panic("spinlock %s: release by non-owner", lock->name);
+	}
+	lock->hartid = -1;
+#endif
+
+	// On RISC-V, amoswap.w.rl writes 0 to lock->locked and returns the old value.
+	// The ".rl" (release) memory ordering semantics prevent preceding memory accesses
+	// from being reordered after this one.
+	__sync_lock_release(&lock->locked);
+
+	pop_off(lock->old_sstatus); // re-enable interrupts.
 }
-
-int spin_unlock()
-{
-    // No-op for debugging  
-    return 0;
-}
-*/
-
-/* Alternative: True atomic spinlock implementation (commented out for now)
- * Uncomment if you need true spinlock semantics with atomic operations */
-
-/*
-typedef struct spinlock {
-    volatile int locked;
-    char *name;  // For debugging
-} spinlock_t;
-
-void spinlock_init(spinlock_t *lock, char *name)
-{
-    lock->locked = 0;
-    lock->name = name;
-}
-
-void spinlock_acquire(spinlock_t *lock)
-{
-    // Disable interrupts to avoid deadlock
-    w_sstatus(r_sstatus() & ~SSTATUS_SIE);
-    
-    // Use RISC-V atomic test-and-set
-    while (__sync_lock_test_and_set(&lock->locked, 1) != 0) {
-        // Spin wait with memory barrier
-        asm volatile("" ::: "memory");
-    }
-    
-    // Memory barrier to ensure critical section doesn't leak out
-    __sync_synchronize();
-}
-
-void spinlock_release(spinlock_t *lock)
-{
-    // Memory barrier to ensure critical section doesn't leak in
-    __sync_synchronize();
-    
-    // Release the lock
-    __sync_lock_release(&lock->locked);
-    
-    // Re-enable interrupts
-    w_sstatus(r_sstatus() | SSTATUS_SIE);
-}
-*/

@@ -7,7 +7,7 @@ typedef struct timer
 {
 	void (*func)(void *arg);
 	void *arg;
-	uint64_t timeout_tick;  // Changed to 64-bit for S-mode compatibility
+	uint64_t timeout_tick; // Changed to 64-bit for S-mode compatibility
 	struct timer *next;
 } timer;
 
@@ -16,10 +16,11 @@ typedef struct timer
 
 extern timer *timers, *next_timer;
 
-extern uint64_t get_time(void);  // Renamed from get_mtime, returns 64-bit time
+extern uint64_t get_time(void); // Renamed from get_mtime, returns 64-bit time
 extern void print_timers(void);
 extern void wake_up_task(void *arg);
-extern void timer_load(uint64_t);  // Changed parameter type to 64-bit
+extern void timer_load(uint64_t); // Changed parameter type to 64-bit
+extern void timer_init(void);
 extern void timer_handler();
 extern timer *timer_create(
 	void (*handler)(void *arg),

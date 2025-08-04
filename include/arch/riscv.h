@@ -209,4 +209,34 @@ extern void disable_pmp(void);
 #define r_sie() read_csr_sie()
 #define w_sie(x) write_csr_sie(x)
 
+// Interrupt control
+
+// push_off/pop_off are like intr_off()/intr_on() except that they are matched:
+// it takes two pop_off()s to undo two push_off()s. Also, if interrupts
+// are initially off, then push_off, pop_off leaves them off.
+
+static inline reg_t push_off()
+{
+	reg_t old_sstatus = r_sstatus();
+	// clear SIE bit
+	w_sstatus(old_sstatus & ~SSTATUS_SIE);
+	return old_sstatus;
+}
+
+static inline void pop_off(reg_t old_sstatus)
+{
+	w_sstatus(old_sstatus);
+}
+
+// Provides a hint to the CPU that we are in a spin-wait loop.
+static inline void spin_loop_hint()
+{
+	// The 'pause' instruction is a hint to the CPU that the code is in a
+	// spin-wait loop. This can help the CPU save power and improve performance
+	// by yielding execution resources to other hyper-threads.
+	// RISC-V has a 'pause' instruction in the Zihintpause extension.
+	// For now, we use a compiler memory barrier as a placeholder.
+	__asm__ volatile ("" ::: "memory");
+}
+
 #endif /* __RISCV_H__ */

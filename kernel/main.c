@@ -15,12 +15,7 @@
  * so just declared here ONCE and NOT included in file os.h.
  */
 // extern void uart_init(void);  // Not needed when using SBI console
-extern void sched_init(void);
-extern void schedule(void);
-extern void os_main(void);
-extern void trap_init(void);
-extern void plic_init(void);
-extern void timer_init(void);
+extern void os_main(void); // TODO: should be in a proper header file
 extern struct context *current_ctx;
 
 /**
@@ -28,7 +23,7 @@ extern struct context *current_ctx;
  * @details
  *   此函数由 `arch/riscv/start.S` 中的汇编代码在完成基本的硬件初始化后调用。
  *   它的核心职责是初始化内核的各个关键子系统，创建初始任务，并启动调度器。
- * 
+ *
  * @callgraph
  *   - `_start` (arch/riscv/start.S)
  *     - 设置栈指针
@@ -46,28 +41,28 @@ extern struct context *current_ctx;
 void start_kernel(void)
 {
     /* Initialize boot information from device tree */
-    //boot_info_init();
-    
+    // boot_info_init();
+
     /* Initialize hardware info from device tree using Rust */
-    //init_fdt_and_devices_rust(get_dtb_addr());
-    
+    // init_fdt_and_devices_rust(get_dtb_addr());
+
     /* Use SBI console instead of direct UART manipulation */
     printk("Hello, RVOS!\n");
-    
+
     /* Display hart information */
     long current_hartid = sbi_get_hartid();
     printk("RVOS: Starting kernel on Hart %ld\n", current_hartid);
-    
+
     /* Display all hart status using Hart management */
     hart_print_status_all();
 
     page_init();
-    
+
     malloc_init();
-    
+
     trap_init();
 
-    //verify_syscall_table(); // 初次验证系统调用表
+    // verify_syscall_table(); // 初次验证系统调用表
 
     plic_init();
 
@@ -81,7 +76,7 @@ void start_kernel(void)
     os_main();
 #endif
 
-    //disable_pmp(); // 禁用PMP，允许U-Mode访问所有内存
+    // disable_pmp(); // 禁用PMP，允许U-Mode访问所有内存
 
     kernel_scheduler();
 

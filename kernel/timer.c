@@ -1,8 +1,12 @@
 #include "kernel.h"
 #include "arch/sbi.h"
+#include "kernel/spinlock.h"
 extern timer *insert_to_timer_list(timer *timer_head, timer *_timer);
 extern timer *delete_from_timer_list(timer *timer_head, timer *_timer);
 timer *timers = NULL, *next_timer = NULL;
+
+// Timer subsystem spinlock
+static struct spinlock timer_lock;
 
 extern void schedule(void);
 
@@ -30,6 +34,9 @@ uint64_t get_time(void)
 
 void timer_init()
 {
+    // Initialize timer subsystem spinlock
+    spinlock_init(&timer_lock, "timer_lock");
+
     /*
      * In S-mode, timer interrupts are handled via SBI.
      * We enable supervisor timer interrupts instead of machine-mode.
@@ -82,7 +89,7 @@ void run_timer_list()
     if (timers == NULL)
     {
         timer_create(schedule_wrapper, NULL, 1);
-        spin_unlock();
+        spinlock_release(&timer_lock);
         return;
     }
     timer_load(timers->timeout_tick);
@@ -90,17 +97,17 @@ void run_timer_list()
 
 void timer_handler()
 {
-    spin_lock();
-    //printk("tick: %d\n", _tick++);
-    //printk("time: %ld\n", get_time());
-    // print_tasks();
-    // print_timers();
-    //  if (timers->func == timer_handler)
-    //  {
-    //      timer_create(timer_handler, NULL, 1);
-    //  }
+    spinlock_acquire(&timer_lock);
+    // printk("tick: %d\n", _tick++);
+    // printk("time: %ld\n", get_time());
+    //  print_tasks();
+    //  print_timers();
+    //   if (timers->func == timer_handler)
+    //   {
+    //       timer_create(timer_handler, NULL, 1);
+    //   }
     run_timer_list();
-    spin_unlock();
+    spinlock_release(&timer_lock);
     // check_timeslice();
 }
 
@@ -127,7 +134,7 @@ void print_timers(void)
         {
             func_name = "timer_handler";
         }
-        else if (current->func == task_yield)
+        else if ((void (*)(void *))current->func == (void (*)(void *))task_yield)
         {
             func_name = "task_yield";
         }

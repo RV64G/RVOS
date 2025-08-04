@@ -10,13 +10,14 @@
 /* --- 页分配器 (Page Allocator) --- */
 
 // Page descriptor structure (exposed for testing)
-struct Page {
+struct Page
+{
     uint8_t flags;
 };
 
 // Page flags
 #define PAGE_TAKEN 0x01
-#define PAGE_LAST  0x02
+#define PAGE_LAST 0x02
 
 // 初始化物理页分配器
 void page_init(void);
@@ -26,11 +27,10 @@ void *page_alloc(int npages);
 void page_free(void *p);
 
 // Utility functions (exposed for testing)
-uint32_t _align_page(uint32_t address);
+uintptr_t _align_page(uintptr_t address);
 int get_total_pages(void);
 int get_allocatable_pages(void);
-struct Page* get_page_descriptors(void);
-
+struct Page *get_page_descriptors(void);
 
 /* --- 块分配器 (Block Allocator / Heap) --- */
 // 初始化块分配器 (malloc/free)
@@ -43,6 +43,5 @@ void free(void *ptr);
 void print_free_list(void);
 // [调试] 打印指定内存块的内容
 void print_block(void *ptr);
-
 
 #endif /* __KERNEL_MM_H__ */
