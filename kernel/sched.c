@@ -16,8 +16,8 @@ extern void switch_to(struct context *next);
  * In the standard RISC-V calling convention, the stack pointer sp
  * is always 16-byte aligned.
  */
-uint8_t task_stack[MAX_TASKS][STACK_SIZE];
-uint8_t kernel_stack_kernel[KERNEL_STACK_SIZE];
+uint8_t __attribute__((aligned(16))) task_stack[MAX_TASKS][STACK_SIZE];
+uint8_t __attribute__((aligned(16))) kernel_stack_kernel[KERNEL_STACK_SIZE];
 static struct spinlock sched_lock;
 // __attribute__((aligned(16)))
 struct task_struct tasks[MAX_TASKS];
@@ -227,7 +227,9 @@ int task_create(void (*start_routine)(void *param), void *param, uint8_t priorit
 
 	new_task->start_routine = start_routine;
 	new_task->param = param;
-	new_task->ctx.sp = (reg_t)&task_stack[task_id][STACK_SIZE - 1];
+	// Fix: Stack pointer must be 16-byte aligned. 
+    // Point to the byte *after* the array, which is the valid Top of Stack for a downward growing stack.
+	new_task->ctx.sp = (reg_t)task_stack[task_id] + STACK_SIZE;
 	new_task->ctx.pc = (reg_t)start_routine;
 	new_task->ctx.a0 = (reg_t)param;
 

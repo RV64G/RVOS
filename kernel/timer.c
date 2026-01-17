@@ -1,6 +1,7 @@
 #include "kernel.h"
 #include "arch/sbi.h"
 #include "kernel/spinlock.h"
+#include "kernel/mm.h"
 extern timer *insert_to_timer_list(timer *timer_head, timer *_timer);
 extern timer *delete_from_timer_list(timer *timer_head, timer *_timer);
 timer *timers = NULL, *next_timer = NULL;
@@ -47,6 +48,9 @@ void timer_init()
     w_sie(r_sie() | SIE_STIE);
     /* supervisor-mode global interrupts are controlled by sstatus.SIE */
     w_sstatus(r_sstatus() | SSTATUS_SIE);
+
+    /* Kickstart the timer */
+    timer_load(get_time() + TIMER_INTERVAL);
 }
 
 timer *timer_create(void (*handler)(void *arg), void *arg, uint32_t timeout)
@@ -60,14 +64,20 @@ timer *timer_create(void (*handler)(void *arg), void *arg, uint32_t timeout)
     t->arg = arg;
     t->timeout_tick = get_time() + timeout * TIMER_INTERVAL;
     t->next = NULL;
+
+    spinlock_acquire(&timer_lock);
     timers = insert_to_timer_list(timers, t);
-    // timer_load(timeout); // 确保加载定时器
+    spinlock_release(&timer_lock);
+    
     return t;
 }
 
 void timer_delete(timer *timer)
 {
+    spinlock_acquire(&timer_lock);
     timers = delete_from_timer_list(timers, timer);
+    spinlock_release(&timer_lock);
+    
     free(timer);
 }
 
@@ -80,17 +90,23 @@ void run_timer_list()
         timer *expired = timers;
         timers = timers->next;
 
+        // Unlock before executing callback (which might schedule/switch context)
+        spinlock_release(&timer_lock);
+        
         // 执行定时器回调
         expired->func(expired->arg);
 
         // 释放定时器
         free(expired);
+        
+        // Re-lock to continue list processing
+        spinlock_acquire(&timer_lock);
     }
     if (timers == NULL)
     {
-        timer_create(schedule_wrapper, NULL, 1);
         spinlock_release(&timer_lock);
-        return;
+        timer_create(schedule_wrapper, NULL, 1);
+        spinlock_acquire(&timer_lock);
     }
     timer_load(timers->timeout_tick);
 }

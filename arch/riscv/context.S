@@ -141,6 +141,12 @@ atomic_swap:
 trap_vector:	# save context(registers).
 	csrrw	t6, sscratch, t6	# swap t6 and sscratch (use sscratch instead of mscratch)
         reg_save t6
+        
+        # Manually save the original t6 (which is now in sscratch)
+        # We can use t0 as temp because it has already been saved by reg_save
+        csrr    t0, sscratch
+        sd      t0, 240(t6)     # Save original t6 to context (offset 240)
+
         csrw	sscratch, t6
 
 	# save sepc to context of current task (S-mode equivalent of mepc)

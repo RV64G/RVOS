@@ -1,17 +1,6 @@
 {
-  "version": "2.0.0",
-  "tasks": [
-    {
-      "label": "stop-qemu",
-      "type": "shell",
-      "command": "killall qemu-system-riscv64 || true"
-    },
-    {
-      "label": "start-qemu-server",
-      "type": "shell",
-      "command": "make qemu-gdb-server",
-      "isBackground": true,
-      "problemMatcher": [
+    "version": "2.0.0",
+    "tasks": [
         {
             "label": "stop-qemu",
             "type": "shell",
@@ -77,7 +66,10 @@
             "label": "Start OpenOCD",
             "type": "shell",
             "command": "openocd",
-            "args": ["-f", "mars_jtag.cfg"],
+            "args": [
+                "-f",
+                "mars_jtag.cfg"
+            ],
             "group": "build",
             "isBackground": true,
             "problemMatcher": {
@@ -92,21 +84,14 @@
                 }
             }
         },
-        "background": {
-          "activeOnStart": true,
-          "beginsPattern": "^Open On-Chip Debugger",
-          "endsPattern": "Listening on port 3333 for gdb connections"
+        {
+            "label": "Stop OpenOCD",
+            "type": "shell",
+            "command": "pkill",
+            "args": [
+                "-f",
+                "openocd"
+            ]
         }
-      }
-    },
-    {
-      "label": "Stop OpenOCD",
-      "type": "shell",
-      "command": "pkill",
-      "args": [
-        "-f",
-        "openocd"
-      ]
-    }
-  ]
+    ]
 }

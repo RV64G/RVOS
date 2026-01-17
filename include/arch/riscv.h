@@ -103,6 +103,7 @@ static inline reg_t r_mcause()
 }
 
 /* Supervisor Status Register, sstatus - S-mode equivalent of mstatus */
+#define SSTATUS_SUM (1L << 18) // Supervisor User Memory access
 #define SSTATUS_SPP (1 << 8)   // Supervisor Previous Privilege
 #define SSTATUS_SPIE (1 << 5)  // Supervisor Previous Interrupt Enable
 #define SSTATUS_SIE (1 << 1)   // Supervisor Interrupt Enable
@@ -237,6 +238,19 @@ static inline void spin_loop_hint()
 	// RISC-V has a 'pause' instruction in the Zihintpause extension.
 	// For now, we use a compiler memory barrier as a placeholder.
 	__asm__ volatile ("" ::: "memory");
+}
+
+/* Supervisor Address Translation and Protection (satp) */
+static inline void w_satp(reg_t x)
+{
+	asm volatile("csrw satp, %0" : : "r" (x));
+}
+
+/* Supervisor Memory-Management Fence */
+static inline void sfence_vma()
+{
+	/* the zero, zero means flush all TLB entries. */
+	asm volatile("sfence.vma zero, zero");
 }
 
 #endif /* __RISCV_H__ */

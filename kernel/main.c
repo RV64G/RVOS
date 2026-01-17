@@ -56,8 +56,9 @@ void start_kernel(void)
     /* Display all hart status using Hart management */
     hart_print_status_all();
 
-    page_init();
-
+    	page_init();
+    	kvminit();       // 建立内核页表 (Identity Mapping)
+    	kvminithart();   // 开启 MMU (Write SATP)
     malloc_init();
 
     trap_init();

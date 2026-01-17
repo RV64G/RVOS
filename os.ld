@@ -86,7 +86,17 @@ SECTIONS
 	 */
 	.text : {
 		PROVIDE(_text_start = .);
-		*(.text .text.*)
+		/* Map Kernel Code, excluding user object files */
+		*(EXCLUDE_FILE(*build/user/*.o) .text .text.*)
+		
+		/* Isolate User Text for permission control */
+		. = ALIGN(4096);
+		PROVIDE(_user_text_start = .);
+		*(.user_text)
+		/* Catch all text from build/user/ directory */
+		*build/user/*.o(.text .text.*)
+		. = ALIGN(4096);
+		PROVIDE(_user_text_end = .);
 		PROVIDE(_text_end = .);
 	} >ram
 

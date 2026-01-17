@@ -13,6 +13,17 @@
       "postDebugTask": "stop-qemu"
     },
     {
+      "name": "RT QEMU Debug",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/os.elf",
+      "cwd": "${workspaceFolder}",
+      "miDebuggerPath": "gdb-multiarch",
+      "miDebuggerServerAddress": "localhost:1234",
+      "preLaunchTask": "Debug: Start QEMU for RT",
+      "postDebugTask": "stop-qemu"
+    },
+    {
       "name": "JTAG Debug",
       "type": "cppdbg",
       "request": "launch",
@@ -29,42 +40,9 @@
           "ignoreFailures": true
         },
         {
-            "name": "RT QEMU Debug",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/os.elf",
-            "cwd": "${workspaceFolder}",
-            "miDebuggerPath": "gdb-multiarch",
-            "miDebuggerServerAddress": "localhost:1234",
-            "preLaunchTask": "Debug: Start QEMU for RT",
-            "postDebugTask": "stop-qemu"
-        },
-        {
-            "name": "JTAG Debug",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/os.elf",
-            "cwd": "${workspaceFolder}",
-            "miDebuggerPath": "gdb-multiarch",
-            "miDebuggerServerAddress": "localhost:3333",
-            "preLaunchTask": "Start OpenOCD",
-            "postDebugTask": "Stop OpenOCD",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                },
-                {
-                    "description": "Set architecture to RISC-V 64-bit",
-                    "text": "set architecture riscv:rv64",
-                    "ignoreFailures": false
-                }
-            ],
-            "targetArchitecture": "x64",
-            "environment": [],
-            "externalConsole": false,
-            "MIMode": "gdb"
+          "description": "Set architecture to RISC-V 64-bit",
+          "text": "set architecture riscv:rv64",
+          "ignoreFailures": false
         }
       ],
       "targetArchitecture": "x64",

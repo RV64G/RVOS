@@ -1,7 +1,7 @@
 #include <stddef.h>  // for size_t
 #include "uapi/printf.h"
 #include "syscalls.h"  // 使用新的系统调用声明
-#include "string.h"
+#include "lib.h"
 
 #define PRINTF_BUF_SIZE 256  // 减小到256字节
 

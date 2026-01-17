@@ -83,51 +83,61 @@ void *malloc(size_t nbytes)
         return NULL;
     }
 
-    spinlock_acquire(&malloc_lock);
-
     // 计算需要多少个Header大小的单元。
     // 我们为头部本身加1，并向上取整，以确保用户数据区足够大。
     nunits = (nbytes + sizeof(Header) - 1) / sizeof(Header) + 1;
 
-    prevp = freep;
-    // 遍历循环空闲链表，查找一个足够大的块。
-    for (p = prevp->s.next;; prevp = p, p = p->s.next)
+    // 重试循环：如果需要申请新内存，我们会重新开始搜索
+    for (;;)
     {
-        if (p->s.size >= nunits)
-        { // 找到了一个足够大的块
-            if (p->s.size == nunits)
-            {
-                // 大小正好合适，直接从链表中移除。
-                prevp->s.next = p->s.next;
-            }
-            else
-            {
-                // 块比需求大，从尾部分配。
-                // 这样可以避免修改空闲链表中的指针。
-                p->s.size -= nunits;
-                p += p->s.size;
-                p->s.size = nunits;
-            }
-            // 将下一次malloc的搜索起点设置为我们找到的块的前一个块。
-            // 这有助于在堆中分散分配。
-            freep = prevp;
-            // 返回指向用户数据区的指针，就在头部之后。
-            void *result = (void *)(p + 1);
-            spinlock_release(&malloc_lock);
-            return result;
-        }
-
-        // 如果遍历完整个空闲链表都没有找到合适的块。
-        if (p == freep)
+        spinlock_acquire(&malloc_lock);
+        
+        prevp = freep;
+        // 遍历循环空闲链表，查找一个足够大的块。
+        for (p = prevp->s.next;; prevp = p, p = p->s.next)
         {
-            // 向系统申请更多内存。
-            if ((p = morecore(nunits)) == NULL)
-            {
-                // 内存耗尽。
+            if (p->s.size >= nunits)
+            { // 找到了一个足够大的块
+                if (p->s.size == nunits)
+                {
+                    // 大小正好合适，直接从链表中移除。
+                    prevp->s.next = p->s.next;
+                }
+                else
+                {
+                    // 块比需求大，从尾部分配。
+                    // 这样可以避免修改空闲链表中的指针。
+                    p->s.size -= nunits;
+                    p += p->s.size;
+                    p->s.size = nunits;
+                }
+                // 将下一次malloc的搜索起点设置为我们找到的块的前一个块。
+                // 这有助于在堆中分散分配。
+                freep = prevp;
+                // 返回指向用户数据区的指针，就在头部之后。
+                void *result = (void *)(p + 1);
                 spinlock_release(&malloc_lock);
-                return NULL;
+                return result;
+            }
+
+            // 如果遍历完整个空闲链表都没有找到合适的块。
+            if (p == freep)
+            {
+                break; // 跳出内层循环，准备申请新内存
             }
         }
+        
+        // 释放锁，然后申请更多内存
+        spinlock_release(&malloc_lock);
+        
+        // 向系统申请更多内存（在锁外执行）
+        if ((p = morecore(nunits)) == NULL)
+        {
+            // 内存耗尽
+            return NULL;
+        }
+        
+        // 申请成功，重新开始搜索（外层循环会重新加锁）
     }
 }
 

@@ -1,7 +1,7 @@
 #include "arch/platform.h"
 
 	# size of each hart's stack is 1024 bytes
-	.equ	STACK_SIZE, 1024
+	.equ	STACK_SIZE, 4096
 
 	.global	_start
 	.text
@@ -12,6 +12,11 @@ _start:
 	
 	# Save hart ID from a0 register (not from mhartid CSR)
 	mv	tp, a0			# keep CPU's hartid in its tp for later usage.
+    
+    # Force disable paging (MMU) to ensure we are in a clean state
+    # This fixes issues when reloading via JTAG where satp might be dirty
+    csrw satp, zero
+    sfence.vma
 
 	# Check hart ID: if hart 1, normal boot; others start hart 1 and stop themselves
 	li	t0, 1
@@ -45,10 +50,10 @@ hart1_normal_boot:
 					# to the end of the first stack space
 	add	sp, sp, t0		# move the current hart stack pointer
 					# to its place in the stack space
-	# In S-mode, we need to prepare sstatus instead of mstatus
 	# Set sstatus.SPP to 1 (S-mode), so we stay in S-mode after SRET
 	# Set sstatus.SPIE to 1, so SRET will enable the interrupt
-	li	t0, 1 << 8 | 1 << 5		# SPP=1 (S-mode), SPIE=1
+	# Set sstatus.SUM to 1, so S-mode can access U-mode pages (since we use PTE_U for RAM)
+	li	t0, 1 << 18 | 1 << 8 | 1 << 5		# SUM=1, SPP=1, SPIE=1
 	csrr	a1, sstatus
 	or	t0, t0, a1
 	csrw	sstatus, t0
@@ -147,8 +152,7 @@ _secondary_start:
     wfi
     j .L_secondary_hang
 
-	# In the standard RISC-V calling convention, the stack pointer sp
-	# is always 16-byte aligned.
+.section .bss
 .balign 16
 stacks:
 	.skip	STACK_SIZE * MAXNUM_CPU # allocate space for all the harts stacks

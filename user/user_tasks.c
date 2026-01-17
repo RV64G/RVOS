@@ -1,10 +1,12 @@
 #include "uapi/printf.h"
 #include "syscalls.h" // 使用新的系统调用声明
 #include "uapi/user_tasks.h"
-#include "string.h"
+#include "lib.h"    // Use our new User Library
 #include <stdint.h> // 为了使用 intptr_t
 
-void user_task0(void *param)
+#define USER_TEXT __attribute__((section(".user_text")))
+
+void USER_TEXT user_task0(void *param)
 {
 	printf("Task 0: Created!\n");
 	while (1)
@@ -14,7 +16,7 @@ void user_task0(void *param)
 	}
 }
 
-void user_task1(void *param)
+void USER_TEXT user_task1(void *param)
 {
 	printf("Task 1: Created!\n");
 	while (1)
@@ -24,7 +26,7 @@ void user_task1(void *param)
 	}
 }
 
-void user_task(void *param)
+void USER_TEXT user_task(void *param)
 {
 	int task_id = (int)(intptr_t)param; // 安全地从指针转换为整数
 	printf("Task %d: Created!\n", task_id);
@@ -42,7 +44,7 @@ void user_task(void *param)
 	exit(0);
 }
 
-void test_syscalls_task(void *param)
+void USER_TEXT test_syscalls_task(void *param)
 {
 	printf("Task: test_syscalls_task started.\n");
 

@@ -67,6 +67,7 @@ SRCS_C = \
 	kernel/user.c \
 	kernel/hart.c \
 	mm/page.c \
+	mm/vm.c \
 	mm/malloc.c \
 	drivers/plic.c
 
@@ -80,7 +81,8 @@ TEST_SRCS_C = \
 USER_SRCS_C = \
 	user/printf.c \
 	user/syscalls.c \
-	user/user_tasks.c
+	user/user_tasks.c \
+	user/lib.c
 
 # --- Object Files ---
 OBJS_ASM = $(addprefix $(BUILD_DIR)/, $(addsuffix .o, $(basename $(SRCS_ASM))))
