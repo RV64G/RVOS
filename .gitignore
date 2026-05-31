@@ -86,6 +86,9 @@ Thumbs.db
 
 *.scr
 Image
+*.EFI
+*.efi
+*.img
 .gemini/
 tags
 

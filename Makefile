@@ -1,9 +1,10 @@
 # RISC-V OS Makefile
 #
 # 主要目标:
-#   make        - 构建操作系统
+#   make        - 构建默认 EFI 应用
 #   make clean  - 清理所有构建文件
-#   make run    - 在QEMU中运行操作系统
+#   make image  - 构建旧版裸内核镜像
+#   make run    - 在 QEMU 中运行旧版裸内核
 #   make rt     - 在QEMU中运行测试模式
 #   make wall   - 使用严格的警告选项进行构建
 
@@ -23,6 +24,8 @@ IMAGE_BIN  = Image
 BOOT_CMD   = boot.cmd
 BOOT_SCR   = boot.scr
 
+include mk/efi.mk
+
 # --- Object Files ---
 OBJS_ASM = $(addprefix $(BUILD_DIR)/, $(addsuffix .o, $(basename $(SRCS_ASM))))
 OBJS_C   = $(addprefix $(BUILD_DIR)/, $(addsuffix .o, $(basename $(SRCS_C))))
@@ -37,7 +40,12 @@ OBJS     = $(OBJS_ASM) $(OBJS_C) $(USER_OBJS_C)
 endif
 
 # --- Targets ---
-all: $(TARGET) $(IMAGE_BIN) txt
+all: efi
+	@echo "Build completed successfully"
+	@echo "Default artifact:"
+	@echo "  - $(EFI_BOOT_APP) : RISC-V UEFI application"
+
+image: $(TARGET) $(IMAGE_BIN) txt
 	@echo "Build completed successfully"
 	@echo "Files generated:"
 	@echo "  - $(TARGET)     : ELF executable"
@@ -91,7 +99,7 @@ clean:
 	rm -rf $(BUILD_DIR) os.txt $(IMAGE_BIN) $(BOOT_CMD) $(BOOT_SCR) wall_warnings.log
 
 # Run in QEMU
-run: all
+run: image
 	@$(QEMU) -M ? | grep virt >/dev/null || exit
 	@echo "Press Ctrl-A and then X to exit QEMU"
 	@echo "------------------------------------"
@@ -102,7 +110,7 @@ rt:
 	@echo "Building and running in TEST MODE..."
 	@echo "======================================"
 	@$(MAKE) clean
-	@$(MAKE) all RUN_TEST=1
+	@$(MAKE) image RUN_TEST=1
 	@echo "Starting QEMU in test mode..."
 	@echo "Press Ctrl-A and then X to exit QEMU"
 	@echo "------------------------------------"
@@ -144,20 +152,20 @@ wall:
 	@echo "This will treat warnings as errors and log output to wall_warnings.log"
 	@echo "-----------------------------------------------------------------------"
 	@$(MAKE) clean > /dev/null
-	@($(MAKE) -k all CFLAGS_WARN="$(CFLAGS_WARN_STRICT)" > wall_warnings.log 2>&1) || true
+	@($(MAKE) -k image CFLAGS_WARN="$(CFLAGS_WARN_STRICT)" > wall_warnings.log 2>&1) || true
 	@echo "Strict compilation finished. Check wall_warnings.log for details."
 
 # Start QEMU and wait for a GDB connection
-qemu-gdb-server: all
+qemu-gdb-server: image
 	@echo "Starting QEMU for GDB connection..."
 	@echo "QEMU GDB server will listen on port 1234"
 	@$(QEMU) $(QFLAGS) -kernel $(TARGET) -s -S
 
 # Start QEMU and GDB for a debugging session
-debug: all
+debug: image
 	@echo "Press Ctrl-C and then input 'quit' to exit GDB and QEMU"
 	@echo "-------------------------------------------------------"
 	@$(QEMU) $(QFLAGS) -kernel $(TARGET) -s -S &
 	@$(GDB) $(TARGET) -q -x gdbinit
 
-.PHONY: all clean run rt wall qemu-gdb-server debug code txt toolchain check-undef size
+.PHONY: all image clean run rt wall qemu-gdb-server debug code txt toolchain check-undef size
