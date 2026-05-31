@@ -7,30 +7,13 @@
 #   make rt     - 在QEMU中运行测试模式
 #   make wall   - 使用严格的警告选项进行构建
 
-# --- Toolchain ---
-CROSS_COMPILE ?= riscv64-unknown-elf-
-CC      = ${CROSS_COMPILE}gcc
-OBJCOPY = ${CROSS_COMPILE}objcopy
-OBJDUMP = ${CROSS_COMPILE}objdump
-GDB     = gdb-multiarch
+include mk/toolchain.mk
+include mk/sources.mk
+include mk/qemu.mk
 
-# --- Flags ---
-# Base CFLAGS used for both kernel and user code
-CFLAGS_BASE = -nostdlib -fno-builtin -march=rv64gc_zbb -mabi=lp64d -mcmodel=medany -g
-
-# Stricter warnings for the 'wall' target
-CFLAGS_WARN_STRICT = -Wall -Wextra -Werror -Wformat=2 -Wformat-security -Wlogical-op -Wmissing-prototypes -Wstrict-prototypes -Wold-style-definition -Wmissing-declarations -Wpointer-arith -Wwrite-strings -Wcast-qual -Wcast-align -Wshadow -Wredundant-decls -Wnested-externs -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function
-
-# Includes
-INCLUDES = -I include
-
-# Final CFLAGS for kernel and user code
+RVOS_CFLAGS = $(CFLAGS_BASE) $(INCLUDES) $(CFLAGS_WARN)
 ifdef RUN_TEST
-K_CFLAGS = $(CFLAGS_BASE) $(INCLUDES) -DRUN_TEST
-U_CFLAGS = $(CFLAGS_BASE) $(INCLUDES) -DRUN_TEST
-else
-K_CFLAGS = $(CFLAGS_BASE) $(INCLUDES)
-U_CFLAGS = $(CFLAGS_BASE) $(INCLUDES)
+RVOS_CFLAGS += -DRUN_TEST
 endif
 
 # --- Build Paths ---
@@ -39,50 +22,6 @@ TARGET     = $(BUILD_DIR)/os.elf
 IMAGE_BIN  = Image
 BOOT_CMD   = boot.cmd
 BOOT_SCR   = boot.scr
-
-# --- QEMU ---
-QEMU   = qemu-system-riscv64
-QFLAGS = -nographic -smp 4 -machine virt -cpu rv64,zba=true,zbb=true,zbc=true,zbs=true
-
-# --- Source Files ---
-# Assembly files
-SRCS_ASM = \
-	arch/riscv/start.S \
-	arch/riscv/mem.S  \
-	arch/riscv/context.S
-
-# Kernel Source Files
-SRCS_C = \
-	kernel/main.c \
-	kernel/fdt.c \
-	kernel/printk.c \
-	kernel/sched.c \
-	kernel/syscall.c \
-	kernel/string.c \
-	kernel/trap.c \
-	kernel/timer.c \
-	kernel/spinlock.c \
-	kernel/algorithm.c \
-	kernel/boot_info.c \
-	kernel/user.c \
-	kernel/hart.c \
-	mm/page.c \
-	mm/vm.c \
-	mm/malloc.c \
-	drivers/plic.c
-
-# Test Source Files (only included in test mode)
-TEST_SRCS_C = \
-	test/test_main.c \
-	test/test_page.c \
-	test/test_multicore.c
-
-# User Source Files (C)
-USER_SRCS_C = \
-	user/printf.c \
-	user/syscalls.c \
-	user/user_tasks.c \
-	user/lib.c
 
 # --- Object Files ---
 OBJS_ASM = $(addprefix $(BUILD_DIR)/, $(addsuffix .o, $(basename $(SRCS_ASM))))
@@ -109,31 +48,31 @@ all: $(TARGET) $(IMAGE_BIN) txt
 # Link the final ELF file
 $(TARGET): $(OBJS)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS_BASE) -T os.ld $(OBJS) -o $@
+	$(CC) $(LDFLAGS_BASE) -T os.ld $(OBJS) -o $@
 	@echo "Warning: $(TARGET) may have a LOAD segment with RWX permissions. This is common for simple loaders."
 
 # --- Compilation Rules ---
 # Rule for Kernel C files
 $(OBJS_C): $(BUILD_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(K_CFLAGS) -c $< -o $@
+	$(CC) $(RVOS_CFLAGS) -c $< -o $@
 
 # Rule for User C files
 $(USER_OBJS_C): $(BUILD_DIR)/user/%.o: user/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(U_CFLAGS) -c $< -o $@
+	$(CC) $(RVOS_CFLAGS) -c $< -o $@
 
 # Rule for Test C files (only when RUN_TEST is defined)
 ifdef RUN_TEST
 $(TEST_OBJS_C): $(BUILD_DIR)/test/%.o: test/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(K_CFLAGS) -c $< -o $@
+	$(CC) $(RVOS_CFLAGS) -c $< -o $@
 endif
 
 # Rule for Assembly files
 $(OBJS_ASM): $(BUILD_DIR)/%.o: %.S
 	@mkdir -p $(dir $@)
-	$(CC) $(K_CFLAGS) -c $< -o $@
+	$(CC) $(RVOS_CFLAGS) -c $< -o $@
 
 # --- Hardware Image Generation ---
 # Generate Image and boot.scr (for real hardware)
@@ -173,6 +112,27 @@ rt:
 txt: $(TARGET)
 	@$(OBJDUMP) -S $(TARGET) > os.txt
 
+# Print selected toolchain commands
+toolchain:
+	@echo "TOOLCHAIN=$(TOOLCHAIN)"
+	@echo "CC=$(CC)"
+	@echo "OBJCOPY=$(OBJCOPY)"
+	@echo "OBJDUMP=$(OBJDUMP)"
+	@echo "NM=$(NM)"
+	@echo "READELF=$(READELF)"
+	@echo "SIZE=$(SIZE)"
+	@echo "GDB=$(GDB)"
+	@echo "RISCV_MARCH=$(RISCV_MARCH)"
+	@echo "RISCV_ABI=$(RISCV_ABI)"
+
+# Show undefined symbols in the linked ELF
+check-undef: $(TARGET)
+	@$(NM) -u $(TARGET)
+
+# Show ELF section sizes
+size: $(TARGET)
+	@$(SIZE) $(TARGET)
+
 # View disassembled code in 'less'
 code: $(TARGET)
 	@$(OBJDUMP) -S $(TARGET) | less
@@ -200,4 +160,4 @@ debug: all
 	@$(QEMU) $(QFLAGS) -kernel $(TARGET) -s -S &
 	@$(GDB) $(TARGET) -q -x gdbinit
 
-.PHONY: all clean run rt wall qemu-gdb-server debug code txt
+.PHONY: all clean run rt wall qemu-gdb-server debug code txt toolchain check-undef size

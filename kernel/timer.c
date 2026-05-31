@@ -146,7 +146,7 @@ void print_timers(void)
         printk("Timer[%d]:\n", count++);
         printk("  timeout_tick: %ld\n", current->timeout_tick);
         const char *func_name = "unknown";
-        if (current->func == timer_handler)
+        if (current->func == (void (*)(void *))timer_handler)
         {
             func_name = "timer_handler";
         }

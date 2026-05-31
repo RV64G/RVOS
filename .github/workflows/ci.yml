@@ -15,18 +15,16 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Install RISC-V toolchain and QEMU
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          gcc-riscv64-unknown-elf \
-          qemu-system-misc \
-          gdb-multiarch \
-          u-boot-tools \
-          build-essential
+    - name: Install host dependencies
+      run: ./scripts/install-deps-ubuntu.sh
 
-    - name: Build OS kernel (C only)
-      run: make all
+    - name: Build OS kernel with GCC
+      run: make all TOOLCHAIN=gcc
+
+    - name: Build OS kernel with Clang
+      run: |
+        make clean
+        make all
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4

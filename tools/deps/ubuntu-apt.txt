@@ -1,0 +1,22 @@
+# Ubuntu/Debian packages for RVOS development.
+# Install with scripts/install-deps-ubuntu.sh.
+
+build-essential
+git
+curl
+sudo
+
+# RISC-V bare-metal GCC toolchain.
+gcc-riscv64-unknown-elf
+
+# Debugging and QEMU.
+gdb-multiarch
+qemu-system-misc
+
+# LLVM/Clang toolchain.
+clang
+llvm
+lld
+
+# U-Boot mkimage, used by the current Makefile to generate boot.scr.
+u-boot-tools

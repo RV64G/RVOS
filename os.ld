@@ -1,99 +1,68 @@
-/*
- * rvos.ld
- * Linker script for outputting to RVOS
- */
+/* RVOS 链接脚本。 */
 
 /*
- * https://sourceware.org/binutils/docs/ld/Miscellaneous-Commands.html
- * OUTPUT_ARCH command specifies a particular output machine architecture.
- * "riscv" is the name of the architecture for both 64-bit and 32-bit
- * RISC-V target. We will further refine this by using -march
- * and -mabi when calling gcc.
+ * 指定输出文件的目标架构。
+ * 这里的 "riscv" 同时覆盖 32 位和 64 位 RISC-V，具体 ISA 和 ABI 由编译参数
+ * -march/-mabi 决定。
  */
 OUTPUT_ARCH( "riscv" )
 
 /*
- * https://sourceware.org/binutils/docs/ld/Entry-Point.html
- * ENTRY command is used to set the "entry point", which is the first instruction
- * to execute in a program.
- * The argument of ENTRY command is a symbol name, here is "_start" which is
- * defined in start.S.
+ * 指定内核入口符号。
+ * _start 定义在 arch/riscv/start.S 中，OpenSBI/QEMU 跳入内核后会从这里开始执行。
  */
 ENTRY( _start )
 
 /*
- * https://sourceware.org/binutils/docs/ld/MEMORY.html
- * The MEMORY command describes the location and size of blocks of memory in
- * the target.
- * The syntax for MEMORY is:
+ * 描述内核可使用的物理内存区域。
+ *
+ * MEMORY 语法：
  * MEMORY
  * {
- *     name [(attr)] : ORIGIN = origin, LENGTH = len
- *     ......
+ *     name [(attr)] : ORIGIN = 起始地址, LENGTH = 长度
  * }
- * Each line defines a memory region.
- * Each memory region must have a distinct name within the MEMORY command. Here
- * we only define one region named as "ram".
- * The "attr" string is an optional list of attributes that specify whether to
- * use a particular memory region for an input section which is not explicitly
- * mapped in the linker script. Here we assign 'w' (writeable), 'x' (executable),
- * and 'a' (allocatable). We use '!' to invert 'r' (read-only) and
- * 'i' (initialized). * The "ORIGIN" is used to set the start address of the memory region. Here we
- * place it at 0x80200000 to leave space for OpenSBI which typically occupies
- * 0x80000000-0x801FFFFF on real hardware.
- * LENGTH = 126M gives us plenty of RAM while accounting for OpenSBI space.
- * The linker will double check this to make sure everything can fit.
+ *
+ * 这里只定义一个名为 ram 的区域。起始地址放在 0x80200000，是为了给 OpenSBI
+ * 预留 0x80000000-0x801fffff 一段常见占用空间。
+ *
+ * 属性保持为简单的 rwx，GNU ld 和 lld 都能接受。更细的运行期权限由页表控制。
  */
 MEMORY
 {
-	ram   (wxa!ri) : ORIGIN = 0x80200000, LENGTH = 126M
+	ram   (rwx) : ORIGIN = 0x80200000, LENGTH = 126M
 }
 
 /*
- * https://sourceware.org/binutils/docs/ld/SECTIONS.html
- * The SECTIONS command tells the linker how to map input sections into output
- * sections, and how to place the output sections in memory.
- * The format of the SECTIONS command is:
+ * 描述输入段到输出段的映射，以及各段在内存中的摆放顺序。
+ *
+ * SECTIONS 语法：
  * SECTIONS
  * {
- *     sections-command
- *     sections-command
- *     ......
+ *     段描述或符号赋值
  * }
  *
- * Each sections-command may of be one of the following:
- * (1) an ENTRY command
- * (2) a symbol assignment
- * (3) an output section description
- * (4) an overlay description
- * We here only demo (2) & (3).
+ * PROVIDE 用来导出链接期符号，例如 _text_start、_bss_end。C/汇编代码通过这些
+ * 符号定位内核镜像边界、清零 BSS、初始化页分配器。
  *
- * We use PROVIDE command to define symbols.
- * https://sourceware.org/binutils/docs/ld/PROVIDE.html
- * The PROVIDE keyword may be used to define a symbol.
- * The syntax is PROVIDE(symbol = expression).
- * Such symbols as "_text_start", "_text_end" ... will be used in mem.S.
- * Notice the period '.' tells the linker to set symbol(e.g. _text_start) to
- * the CURRENT location ('.' = current memory location). This current memory
- * location moves as we add things.
+ * '.' 表示当前链接地址，随着段内容写入不断向后移动。
  */
 SECTIONS
 {
 	/*
-	 * We are going to layout all text sections in .text output section,
-	 * starting with .text. The asterisk("*") in front of the
-	 * parentheses means to match the .text section of ANY object file.
+	 * 汇总代码段。
+	 * 先放内核代码，再把用户态测试代码放进独立的页对齐区间，方便页表按区间设置
+	 * 用户可执行权限。
 	 */
 	.text : {
 		PROVIDE(_text_start = .);
-		/* Map Kernel Code, excluding user object files */
+		/* 内核代码，不包含 build/user 下的对象文件。 */
 		*(EXCLUDE_FILE(*build/user/*.o) .text .text.*)
 		
-		/* Isolate User Text for permission control */
+		/* 用户态代码区间，用于当前阶段的权限控制。 */
 		. = ALIGN(4096);
 		PROVIDE(_user_text_start = .);
 		*(.user_text)
-		/* Catch all text from build/user/ directory */
+		/* 收集 user/ 目录编译出的普通 .text 段。 */
 		*build/user/*.o(.text .text.*)
 		. = ALIGN(4096);
 		PROVIDE(_user_text_end = .);
@@ -108,16 +77,12 @@ SECTIONS
 
 	.data : {
 		/*
-		 * . = ALIGN(4096) tells the linker to align the current memory
-		 * location to 4096 bytes. This will insert padding bytes until
-		 * current location becomes aligned on 4096-byte boundary.
-		 * This is because our paging system's resolution is 4,096 bytes.
+		 * 数据段按页对齐，便于后续按页设置权限和映射。
 		 */
 		. = ALIGN(4096);
 		PROVIDE(_data_start = .);
 		/*
-		 * sdata and data are essentially the same thing. We do not need
-		 * to distinguish sdata from data.
+		 * 当前内核不区分 sdata 和 data，统一放入 .data。
 		 */
 		*(.sdata .sdata.*)
 		*(.data .data.*)
@@ -126,9 +91,7 @@ SECTIONS
 
 	.bss :{
 		/*
-		 * https://sourceware.org/binutils/docs/ld/Input-Section-Common.html
-		 * In most cases, common symbols in input files will be placed
-		 * in the ‘.bss’ section in the output file.
+		 * COMMON 符号通常也需要进入 BSS，启动阶段由 start.S 统一清零。
 		 */
 		PROVIDE(_bss_start = .);
 		*(.sbss .sbss.*)

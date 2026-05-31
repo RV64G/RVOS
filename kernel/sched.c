@@ -421,7 +421,7 @@ static const char *get_task_func_name(void (*func)(void *))
 		return "user_task1";
 	if (func == user_task)
 		return "user_task";
-	if (func == timer_handler)
+	if (func == (void (*)(void *))timer_handler)
 		return "timer_handler";
 	if ((void (*)(void))func == task_yield)
 		return "task_yield";

@@ -122,7 +122,7 @@ void kvminit()
     // --- 6. Expose User Text (RX, User) ---
     // Add U (User) permission back ONLY for the .user_text section
     printk("Refining User Text (RX, User)...\n");
-    if (_user_text_end > _user_text_start) {
+    if ((uint64_t)_user_text_end > (uint64_t)_user_text_start) {
         kvmmap(kernel_pagetable, (uint64_t)_user_text_start, (uint64_t)_user_text_start, 
                (uint64_t)_user_text_end - (uint64_t)_user_text_start, PTE_R | PTE_X | PTE_U | PTE_A | PTE_D);
     }
