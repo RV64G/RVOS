@@ -1,5 +1,5 @@
 #include "kernel.h"
-#include "arch/sbi.h"
+#include "riscv/sbi.h"
 #include "kernel/printk.h"
 #include "string.h"
 

@@ -4,7 +4,7 @@
 #include "kernel/boot_info.h"
 #include "kernel/hart.h"
 #include "kernel/mm.h"
-#include "arch/sbi.h"
+#include "riscv/sbi.h"
 
 #ifdef RUN_TEST
 #include "../test/test.h"

@@ -93,6 +93,14 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, efi_system_table_t *system_table)
 
     efi_free_memory_map(system_table, &memory_map);
 
+    uint64_t kernel_entry = 0;
+    status = efi_load_kernel_elf(image_handle, system_table, &kernel_entry);
+    if (status != EFI_SUCCESS) {
+        efi_free_pages(system_table, kernel_stack_base, kernel_stack_pages);
+        efi_free_pages(system_table, boot_info, boot_info_pages);
+        return status;
+    }
+
     /*
      * 打印和释放临时 map 都可能改变 memory map。正式交接前必须重新读取最后一版，
      * 然后不再调用其它 Boot Services，直接 ExitBootServices。
@@ -124,7 +132,7 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, efi_system_table_t *system_table)
      * 进入内核前把 sp 设到高地址栈顶；栈按 ABI 约定向低地址增长。
      */
     uint8_t *stack_top = (uint8_t *)kernel_stack_base + boot_info->kernel_stack_size;
-    rvos_jump_to_kernel_stub(stack_top, boot_info);
+    rvos_jump_to_kernel((void *)(uintptr_t)kernel_entry, stack_top, boot_info);
 
     return EFI_SUCCESS;
 }

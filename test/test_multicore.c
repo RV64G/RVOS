@@ -1,7 +1,7 @@
 #include "kernel.h"
 #include "kernel/hart.h"
 #include "kernel/printk.h"
-#include "arch/sbi.h"
+#include "riscv/sbi.h"
 #include "uapi/printf.h" // 假设用户态的 printf 在这里声明
 
 // 声明从汇编启动的函数

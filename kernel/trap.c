@@ -1,5 +1,5 @@
 #include "kernel.h"
-#include "arch/sbi.h"
+#include "riscv/sbi.h"
 #include "kernel/sched.h"  // 包含调度器头文件，获取extern声明
 
 extern void trap_vector(void);

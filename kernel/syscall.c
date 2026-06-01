@@ -3,7 +3,7 @@
 #include "kernel/printk.h"
 #include "kernel/timer.h"
 #include "string.h"
-#include "arch/sbi.h"
+#include "riscv/sbi.h"
 #include "syscalls.h"
 
 /* ==================== 系统调用实现 ==================== */

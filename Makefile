@@ -1,7 +1,7 @@
 # RISC-V OS Makefile
 #
 # 主要目标:
-#   make        - 构建默认 EFI 应用
+#   make        - 构建默认 EFI 应用和内核 ELF
 #   make clean  - 清理所有构建文件
 #   make image  - 构建旧版裸内核镜像
 #   make run    - 在 QEMU/EDK2 中运行默认 EFI 应用
@@ -24,6 +24,7 @@ IMAGE_BIN  = Image
 BOOT_CMD   = boot.cmd
 BOOT_SCR   = boot.scr
 
+include mk/kernel.mk
 include mk/efi.mk
 
 # --- Object Files ---
@@ -40,10 +41,11 @@ OBJS     = $(OBJS_ASM) $(OBJS_C) $(USER_OBJS_C)
 endif
 
 # --- Targets ---
-all: efi
+all: efi kernel
 	@echo "Build completed successfully"
-	@echo "Default artifact:"
+	@echo "Default artifacts:"
 	@echo "  - $(EFI_BOOT_APP) : RISC-V UEFI application"
+	@echo "  - $(KERNEL_ELF) : RVOS kernel ELF"
 
 image: $(TARGET) $(IMAGE_BIN) txt
 	@echo "Build completed successfully"
@@ -179,4 +181,4 @@ debug: image
 	@$(QEMU) $(QFLAGS) -kernel $(TARGET) -s -S &
 	@$(GDB) $(TARGET) -q -x gdbinit
 
-.PHONY: all image clean run run-image rt wall qemu-gdb-server debug code txt toolchain check-undef size
+	.PHONY: all image clean run run-image rt wall qemu-gdb-server debug code txt toolchain check-undef size

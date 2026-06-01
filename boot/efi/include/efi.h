@@ -1,12 +1,10 @@
 #ifndef RVOS_EFI_H
 #define RVOS_EFI_H
 
-typedef unsigned long long uint64_t;
-typedef unsigned int uint32_t;
-typedef unsigned char uint8_t;
-typedef unsigned long long uintptr_t;
-typedef unsigned long long UINTN;
-typedef unsigned long long EFI_STATUS;
+#include <stdint.h>
+
+typedef uintptr_t UINTN;
+typedef uint64_t EFI_STATUS;
 /* EFI_HANDLE 是固件维护的不透明句柄，程序不能假设它的内部结构。 */
 typedef void *EFI_HANDLE;
 typedef unsigned short CHAR16;
@@ -20,7 +18,10 @@ typedef unsigned short CHAR16;
 /* AllocatePool/AllocatePages 使用的内存类型。当前启动器自己的数据用 LoaderData。 */
 #define EFI_LOADER_DATA 2
 #define EFI_ALLOCATE_ANY_PAGES 0
+#define EFI_ALLOCATE_ADDRESS 2
 #define EFI_PAGE_SIZE 4096ULL
+
+#define EFI_FILE_MODE_READ 0x0000000000000001ULL
 
 /* 所有 UEFI 表开头都有这个公共头，用来描述表签名、版本和大小。 */
 typedef struct {
@@ -39,6 +40,10 @@ typedef struct {
 } efi_guid_t;
 
 typedef struct efi_simple_text_output_protocol efi_simple_text_output_protocol_t;
+typedef struct efi_system_table efi_system_table_t;
+typedef struct efi_loaded_image_protocol efi_loaded_image_protocol_t;
+typedef struct efi_simple_file_system_protocol efi_simple_file_system_protocol_t;
+typedef struct efi_file_protocol efi_file_protocol_t;
 
 /* 这里只声明当前阶段会用到的控制台输出函数，其他成员先按指针占位。 */
 struct efi_simple_text_output_protocol {
@@ -55,6 +60,50 @@ typedef struct {
 } efi_configuration_table_t;
 
 typedef struct efi_boot_services efi_boot_services_t;
+
+struct efi_loaded_image_protocol {
+    uint32_t revision;
+    EFI_HANDLE parent_handle;
+    efi_system_table_t *system_table;
+    EFI_HANDLE device_handle;
+    void *file_path;
+    void *reserved;
+    uint32_t load_options_size;
+    void *load_options;
+    void *image_base;
+    uint64_t image_size;
+    uint32_t image_code_type;
+    uint32_t image_data_type;
+    EFI_STATUS (*unload)(EFI_HANDLE image_handle);
+};
+
+struct efi_simple_file_system_protocol {
+    uint64_t revision;
+    EFI_STATUS (*open_volume)(
+        efi_simple_file_system_protocol_t *this,
+        efi_file_protocol_t **root
+    );
+};
+
+struct efi_file_protocol {
+    uint64_t revision;
+    EFI_STATUS (*open)(
+        efi_file_protocol_t *this,
+        efi_file_protocol_t **new_handle,
+        CHAR16 *file_name,
+        uint64_t open_mode,
+        uint64_t attributes
+    );
+    EFI_STATUS (*close)(efi_file_protocol_t *this);
+    void *delete;
+    EFI_STATUS (*read)(efi_file_protocol_t *this, UINTN *buffer_size, void *buffer);
+    void *write;
+    EFI_STATUS (*get_position)(efi_file_protocol_t *this, uint64_t *position);
+    EFI_STATUS (*set_position)(efi_file_protocol_t *this, uint64_t position);
+    void *get_info;
+    void *set_info;
+    void *flush;
+};
 
 /*
  * Boot Services 是退出 EFI 前能调用的服务表。这里按 UEFI 规范顺序声明到
@@ -93,7 +142,11 @@ struct efi_boot_services {
     void *install_protocol_interface;
     void *reinstall_protocol_interface;
     void *uninstall_protocol_interface;
-    void *handle_protocol;
+    EFI_STATUS (*handle_protocol)(
+        EFI_HANDLE handle,
+        efi_guid_t *protocol,
+        void **interface
+    );
     void *reserved;
     void *register_protocol_notify;
     void *locate_handle;
@@ -134,7 +187,7 @@ typedef struct {
  * EFI 固件把 system table 传给 efi_main。它是 EFI 启动层的根对象：
  * 控制台、Boot Services、Runtime Services、configuration table 都从这里拿。
  */
-typedef struct {
+struct efi_system_table {
     efi_table_header_t hdr;
     CHAR16 *firmware_vendor;
     uint32_t firmware_revision;
@@ -148,7 +201,7 @@ typedef struct {
     efi_boot_services_t *boot_services;
     UINTN number_of_table_entries;
     efi_configuration_table_t *configuration_table;
-} efi_system_table_t;
+};
 
 typedef struct {
     void *buffer;

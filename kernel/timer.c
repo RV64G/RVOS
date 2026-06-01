@@ -1,5 +1,5 @@
 #include "kernel.h"
-#include "arch/sbi.h"
+#include "riscv/sbi.h"
 #include "kernel/spinlock.h"
 #include "kernel/mm.h"
 extern timer *insert_to_timer_list(timer *timer_head, timer *_timer);
