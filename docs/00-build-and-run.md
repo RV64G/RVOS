@@ -66,7 +66,123 @@ bootefi 0x80200000
 
 当前默认 EFI 应用不是单纯的 hello world，而是 EFI 启动层的最小形态。它会通过
 UEFI console 打印 RVOS EFI boot 信息，尝试从 UEFI configuration table 中查找 DTB，
-并查询 UEFI memory map 的大小、描述符大小和条目数量。
+并读取 UEFI memory map，打印每条 descriptor 的类型、物理起始地址、页数和属性。
+
+EFI 启动代码放在 `boot/efi/`。其中 `boot/efi/include/` 保存最小 UEFI ABI 声明，
+`boot/efi/boot/` 保存当前 EFI 应用的实现。Makefile 会扫描 `boot/efi/boot/*.c`，
+新增 EFI 启动源文件时不需要手工维护对象列表。
+
+## EFI 阶段的内存分配
+
+EFI 阶段确实需要调用固件提供的分配接口，但它只应该服务于启动器自己。
+
+`GetMemoryMap` 用来向固件索取当前物理内存布局。返回结果是一组 descriptor，每条
+记录描述一段物理内存的类型、起始地址、页数和属性。RVOS 后续建立物理页分配器
+时，应以最后保存下来的 memory map 为主要依据：普通可用内存才能进入空闲页链表，
+MMIO、Runtime Services、保留区域和启动器明确占用的页都不能直接复用。
+
+`AllocatePool` 可以理解成 EFI 阶段的临时 `malloc`。它适合保存路径字符串、临时
+文件缓冲区、探测阶段的 memory map buffer 这类小对象。它不强调页对齐，也不适合
+承载内核镜像。
+
+`AllocatePages` 可以理解成 EFI 阶段的物理页分配。内核 ELF 的加载区域、内核栈、
+早期页表、最终要传给内核的 `boot_info` 和最终 memory map，都更适合按页申请。
+这样 RVOS 接管后可以直接把这些页标记为已占用，剩余可用页再交给自己的页分配器。
+
+典型用途包括：
+
+```text
+读取完整 UEFI memory map 的临时 buffer
+加载内核 ELF 时使用的 I/O buffer
+为内核镜像选择并占用一段物理内存
+构造传给内核的 boot_info
+```
+
+这些分配必须发生在 `ExitBootServices` 之前，因为退出之后 Boot Services 全部失效。
+内核一旦接管，就不能再调用 EFI 的 `AllocatePool` 或 `AllocatePages` 来做普通内存
+管理。RVOS 自己的页分配器、堆分配器和用户态内存布局，仍然要基于启动阶段保存
+下来的 memory map 自己建立。
+
+因此 EFI 启动器里的 allocate 代码应该很窄：只准备启动所需材料，把结果写入
+`boot_info`，然后退出 EFI 并跳进内核。
+
+`GetMemoryMap` 返回的 `map_key` 是当前 memory map 的版本凭证。只要还在调用
+`AllocatePool`、`AllocatePages`、`FreePool` 或 `FreePages`，固件内部的内存表就
+可能变化，旧的 `map_key` 就可能失效。`ExitBootServices(image_handle, map_key)`
+要求传入最后一次成功读取 memory map 时得到的 key；如果 key 过期，固件会拒绝
+退出 Boot Services。
+
+因此正式启动流程应该遵守这个顺序：
+
+```text
+完成所有必须保留的分配
+释放所有临时 buffer
+最后一次 GetMemoryMap，保存最终 memory map 和 map_key
+立刻 ExitBootServices
+跳进 RVOS 内核入口
+```
+
+当前 `memmap.c` 仍然是探测代码，但 memory map buffer 已经按页申请。为了方便
+返回固件菜单，当前打印后会释放这些页；等进入真正的内核加载流程，最终 memory
+map 会保留下来，并通过 `boot_info` 传给内核。
+
+当前实现已经开始构造 `boot_info`。这个结构定义在 `include/rvos/boot_info.h`，
+它是 EFI loader 和 RVOS 内核之间的启动 ABI。第一版只放固定字段，不做变长数组：
+
+```text
+magic / version / size / flags
+DTB 物理地址和大小
+EFI memory map 地址、大小、descriptor size、descriptor version
+boot hart id
+内核镜像地址和大小
+boot_info 自己的地址和大小
+初始内核栈地址和大小
+```
+
+其中 `descriptor size` 不能省略。UEFI 允许 memory descriptor 在未来扩展，遍历
+memory map 时必须按固件返回的 descriptor size 前进，而不是按当前 C 结构体的
+`sizeof` 前进。
+
+RISC-V boot hart id 只通过 `RISCV_EFI_BOOT_PROTOCOL.GetBootHartId()` 获取。这里
+不从 DTB 猜，也不默认写 0；如果固件不提供规范协议，就让启动阶段明确失败。
+
+## EFI 服务是谁提供的
+
+EFI 应用不是直接调用 libc，也不是调用 RVOS 内核。`efi_main` 收到的
+`system_table` 里保存了一组函数指针，例如 console 输出、memory map 查询、pool
+分配和页分配。EFI 应用调用这些函数指针，实际执行者是当前启动固件。
+
+在开发板上，这些服务来自 U-Boot 的 UEFI implementation：
+
+```text
+OpenSBI -> U-Boot -> bootefi -> RVOS EFI app
+```
+
+在 QEMU 上，这些服务来自 EDK2：
+
+```text
+OpenSBI -> EDK2 -> Boot Manager -> RVOS EFI app
+```
+
+UEFI 约定保证了同一个 EFI app 可以在这两条链路上运行，但不同实现仍可能有差异。
+例如 QEMU/EDK2 默认偏向 ACPI，只有 `make run` 显式关闭 ACPI 后，EDK2 才会把 QEMU
+构造的 DTB 注册进 EFI configuration table。
+
+## 多 hart 启动
+
+EFI app 一般只在 boot hart 上运行。机器可以有多个 hart，但固件会选择一个 hart
+进入下一阶段，其他 hart 不会同时跑 `efi_main`。
+
+QEMU 日志里的：
+
+```text
+Platform HART Count : 4
+Boot HART ID        : 1
+```
+
+表示机器有 4 个 hart，当前启动流程跑在 hart 1 上。后续 EFI 启动层需要把 boot
+hart id 整理进 `boot_info`，RVOS 内核据此让主 hart 执行初始化，再通过 SBI HSM
+等机制启动其它 hart。
 
 ## 旧镜像怎么构建
 
@@ -85,9 +201,18 @@ boot.scr
 os.txt
 ```
 
-`make run`、`make debug`、`make qemu-gdb-server` 仍然走旧镜像，因为它们目前使用
-QEMU 的 `-kernel build/os.elf` 路径。等 EFI loader 能真正进入内核后，这些目标
-再迁到 EFI 启动方式。
+`make run` 会走 QEMU/EDK2，启动默认 EFI 应用。旧的 `-kernel build/os.elf` 路径
+保留为 `make run-image`，用于临时验证旧裸内核。
+
+QEMU 的 EFI 路径会显式关闭 ACPI：
+
+```text
+-machine virt,acpi=off
+```
+
+这样 EDK2 会把 QEMU 构造的 DTB 注册进 EFI configuration table，行为更接近当前
+板子上的 U-Boot `bootefi`。`make run` 同时保留 4 个 hart，启动日志里的 boot hart
+不一定是 0，后续 EFI 启动层需要把“当前主核是谁”整理进传给内核的启动信息。
 
 ## 为什么保留 GCC 对照
 

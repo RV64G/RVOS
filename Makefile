@@ -4,7 +4,7 @@
 #   make        - 构建默认 EFI 应用
 #   make clean  - 清理所有构建文件
 #   make image  - 构建旧版裸内核镜像
-#   make run    - 在 QEMU 中运行旧版裸内核
+#   make run    - 在 QEMU/EDK2 中运行默认 EFI 应用
 #   make rt     - 在QEMU中运行测试模式
 #   make wall   - 使用严格的警告选项进行构建
 
@@ -98,8 +98,19 @@ $(IMAGE_BIN): $(TARGET)
 clean:
 	rm -rf $(BUILD_DIR) os.txt $(IMAGE_BIN) $(BOOT_CMD) $(BOOT_SCR) wall_warnings.log
 
-# Run in QEMU
-run: image
+# Run the default EFI application in QEMU.
+$(QEMU_EFI_VARS): $(QEMU_EFI_VARS_TEMPLATE)
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+run: $(EFI_ESP_IMAGE) $(QEMU_EFI_VARS)
+	@$(QEMU) -M ? | grep virt >/dev/null || exit
+	@echo "Press Ctrl-A and then X to exit QEMU"
+	@echo "------------------------------------"
+	@$(QEMU) $(QEMU_EFI_QFLAGS)
+
+# Run the legacy raw kernel image in QEMU.
+run-image: image
 	@$(QEMU) -M ? | grep virt >/dev/null || exit
 	@echo "Press Ctrl-A and then X to exit QEMU"
 	@echo "------------------------------------"
@@ -168,4 +179,4 @@ debug: image
 	@$(QEMU) $(QFLAGS) -kernel $(TARGET) -s -S &
 	@$(GDB) $(TARGET) -q -x gdbinit
 
-.PHONY: all image clean run rt wall qemu-gdb-server debug code txt toolchain check-undef size
+.PHONY: all image clean run run-image rt wall qemu-gdb-server debug code txt toolchain check-undef size

@@ -2,9 +2,11 @@
 
 EFI_BUILD_DIR := $(BUILD_DIR)/efi
 EFI_APP_NAME  := boot
+EFI_APP_SRCS  := $(wildcard boot/efi/$(EFI_APP_NAME)/*.c)
+EFI_APP_OBJS  := $(patsubst boot/efi/$(EFI_APP_NAME)/%.c,$(EFI_BUILD_DIR)/%.o,$(EFI_APP_SRCS))
 EFI_APP_ELF   := $(EFI_BUILD_DIR)/$(EFI_APP_NAME).so
-EFI_APP_OBJ   := $(EFI_BUILD_DIR)/$(EFI_APP_NAME).o
 EFI_BOOT_APP  := $(EFI_BUILD_DIR)/BOOTRISCV64.EFI
+EFI_ESP_IMAGE := $(EFI_BUILD_DIR)/esp.img
 
 EFI_OBJCOPY ?= $(shell if command -v riscv64-elf-objcopy >/dev/null 2>&1; then printf 'riscv64-elf-objcopy'; elif command -v riscv64-unknown-elf-objcopy >/dev/null 2>&1; then printf 'riscv64-unknown-elf-objcopy'; else printf 'riscv64-elf-objcopy'; fi)
 
@@ -15,6 +17,8 @@ EFI_CFLAGS = \
 	-fno-stack-protector \
 	-fno-builtin \
 	-fPIC \
+	-Iboot/efi/include \
+	-Iinclude \
 	-mno-relax \
 	-g
 
@@ -28,13 +32,13 @@ EFI_LDFLAGS = \
 	-Wl,-T,boot/efi/efi.lds \
 	-Wl,--no-relax
 
-$(EFI_APP_OBJ): boot/efi/$(EFI_APP_NAME)/main.c
+$(EFI_BUILD_DIR)/%.o: boot/efi/$(EFI_APP_NAME)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(EFI_CFLAGS) -c $< -o $@
 
-$(EFI_APP_ELF): $(EFI_APP_OBJ)
+$(EFI_APP_ELF): $(EFI_APP_OBJS)
 	@mkdir -p $(dir $@)
-	$(CC) $(EFI_LDFLAGS) $< -o $@
+	$(CC) $(EFI_LDFLAGS) $^ -o $@
 
 $(EFI_BOOT_APP): $(EFI_APP_ELF)
 	@mkdir -p $(dir $@)
@@ -43,10 +47,22 @@ $(EFI_BOOT_APP): $(EFI_APP_ELF)
 		-j .text -j .rodata -j '.rodata.*' -j .data -j .sdata -j .reloc \
 		-O efi-app-riscv64 $< $@
 
+$(EFI_ESP_IMAGE): $(EFI_BOOT_APP)
+	@mkdir -p $(dir $@)
+	rm -f $@
+	truncate -s 64M $@
+	mkfs.vfat -F 32 -n RVOS $@
+	mmd -i $@ ::/EFI
+	mmd -i $@ ::/EFI/BOOT
+	mcopy -i $@ $(EFI_BOOT_APP) ::/EFI/BOOT/BOOTRISCV64.EFI
+
 efi: $(EFI_BOOT_APP)
 	@echo "EFI application generated: $(EFI_BOOT_APP)"
+
+efi-esp: $(EFI_ESP_IMAGE)
+	@echo "EFI system partition image generated: $(EFI_ESP_IMAGE)"
 
 efi-info: $(EFI_BOOT_APP)
 	@file $(EFI_BOOT_APP)
 
-.PHONY: efi efi-info
+.PHONY: efi efi-esp efi-info
