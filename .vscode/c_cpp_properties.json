@@ -1,19 +1,23 @@
 {
     "configurations": [
         {
-            "name": "RISC-V OS",
-            "compilerPath": "/usr/bin/riscv64-unknown-elf-gcc",
+            "name": "RVOS EFI",
+            "compilerPath": "/usr/bin/clang",
             "includePath": [
-                "${workspaceFolder}/**"
+                "${workspaceFolder}/boot/efi/include",
+                "${workspaceFolder}/include",
+                "${workspaceFolder}"
             ],
             "cStandard": "c11",
             "intelliSenseMode": "${default}",
             "compilerArgs": [
-                "-nostdlib",
+                "--target=riscv64-unknown-elf",
+                "-ffreestanding",
+                "-fshort-wchar",
+                "-fno-stack-protector",
                 "-fno-builtin",
-                "-march=rv64gc",
-                "-mabi=lp64d",
-                "-mcmodel=medany"
+                "-fPIC",
+                "-mno-relax"
             ]
         }
     ],

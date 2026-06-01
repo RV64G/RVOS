@@ -184,4 +184,10 @@ void efi_print_boot_info(efi_system_table_t *st, const struct rvos_boot_info *bo
     efi_puts(st, L", boot_info_size=");
     efi_print_u64(st, boot_info->boot_info_size);
     efi_puts(st, L"\r\n");
+
+    efi_puts(st, L"  kernel_stack_phys=");
+    efi_print_hex64(st, boot_info->kernel_stack_phys);
+    efi_puts(st, L", kernel_stack_size=");
+    efi_print_u64(st, boot_info->kernel_stack_size);
+    efi_puts(st, L"\r\n");
 }

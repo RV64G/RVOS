@@ -122,9 +122,15 @@ MMIO、Runtime Services、保留区域和启动器明确占用的页都不能直
 跳进 RVOS 内核入口
 ```
 
-当前 `memmap.c` 仍然是探测代码，但 memory map buffer 已经按页申请。为了方便
-返回固件菜单，当前打印后会释放这些页；等进入真正的内核加载流程，最终 memory
-map 会保留下来，并通过 `boot_info` 传给内核。
+当前 EFI loader 已经会执行最小控制权交接。它先打印探测信息，然后释放临时
+memory map，重新读取最终 memory map，立刻 `ExitBootServices`，切到初始内核栈，
+再 jump 到内置 kernel stub。stub 会通过 SBI debug console 打印一行
+`RVOS kernel stub entered` 后停住；真正内核加载还没有接入。
+
+这里有两份 memory map。第一份只用于调试打印，打印完会释放；释放本身会改变
+memory map，所以不能拿它去 `ExitBootServices`。第二份是在交接前重新读取的最终
+memory map，它不会释放，而是写进 `boot_info` 留给内核。`boot_info` 页和初始
+kernel stack 页同样不会在成功路径释放，内核接手后要把这些页视为已占用。
 
 当前实现已经开始构造 `boot_info`。这个结构定义在 `include/rvos/boot_info.h`，
 它是 EFI loader 和 RVOS 内核之间的启动 ABI。第一版只放固定字段，不做变长数组：
@@ -139,12 +145,27 @@ boot_info 自己的地址和大小
 初始内核栈地址和大小
 ```
 
+初始内核栈当前为 32KB。它只用于进入内核后的早期初始化，后续线程栈、进程栈和
+中断栈仍然应该由 RVOS 自己管理。
+
 其中 `descriptor size` 不能省略。UEFI 允许 memory descriptor 在未来扩展，遍历
 memory map 时必须按固件返回的 descriptor size 前进，而不是按当前 C 结构体的
 `sizeof` 前进。
 
 RISC-V boot hart id 只通过 `RISCV_EFI_BOOT_PROTOCOL.GetBootHartId()` 获取。这里
 不从 DTB 猜，也不默认写 0；如果固件不提供规范协议，就让启动阶段明确失败。
+
+从 EFI loader 跳到内置 stub 时不走普通 C 函数调用，而是走
+`boot/efi/boot/jump.S`。RISC-V EFI app 现在按 PIC 方式构建，C 里取函数指针或汇编
+里使用普通 `la` 可能经由 GOT。当前 PE/COFF 生成链路还没有完整处理这类动态重定位，
+所以跳转目标不能依赖 GOT。`jump.S` 使用 `lla` 生成 PC-relative 地址：
+
+```asm
+lla t0, rvos_kernel_stub
+jr t0
+```
+
+这样切栈后跳到 stub 不依赖未处理的 GOT 项。
 
 ## EFI 服务是谁提供的
 
