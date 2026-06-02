@@ -14,10 +14,11 @@ riscv64-elf-gdb
 qemu-system-riscv
 qemu-system-riscv-firmware
 
+# FAT/ESP image creation for make efi-esp.
+dosfstools
+mtools
+
 # LLVM/Clang toolchain.
 clang
 llvm
 lld
-
-# U-Boot mkimage, used by the current Makefile to generate boot.scr.
-uboot-tools

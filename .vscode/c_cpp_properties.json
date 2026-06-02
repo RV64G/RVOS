@@ -6,6 +6,8 @@
             "includePath": [
                 "${workspaceFolder}/boot/efi/include",
                 "${workspaceFolder}/include",
+                "${workspaceFolder}/kernel",
+                "${workspaceFolder}/mm",
                 "${workspaceFolder}"
             ],
             "cStandard": "c11",

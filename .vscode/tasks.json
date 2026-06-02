@@ -7,28 +7,6 @@
             "command": "killall qemu-system-riscv64 || true"
         },
         {
-            "label": "start-qemu-server",
-            "type": "shell",
-            "command": "make qemu-gdb-server",
-            "isBackground": true,
-            "problemMatcher": [
-                {
-                    "owner": "qemu-server",
-                    "pattern": {
-                        "regexp": ".",
-                        "file": 1,
-                        "location": 2,
-                        "message": 0
-                    },
-                    "background": {
-                        "activeOnStart": true,
-                        "beginsPattern": "^Starting QEMU for GDB connection\\.\\.\\.",
-                        "endsPattern": "^QEMU GDB server will listen on port"
-                    }
-                }
-            ]
-        },
-        {
             "label": "Build",
             "type": "shell",
             "command": "make",
@@ -38,27 +16,17 @@
             }
         },
         {
-            "label": "Build for RT",
+            "label": "Build ESP",
             "type": "shell",
-            "command": "make RUN_TEST=1"
+            "command": "make efi-esp"
         },
         {
-            "label": "Debug: Start QEMU",
+            "label": "Run",
+            "type": "shell",
+            "command": "make run",
             "dependsOrder": "sequence",
             "dependsOn": [
-                "Build",
-                "stop-qemu",
-                "start-qemu-server"
-            ],
-            "problemMatcher": []
-        },
-        {
-            "label": "Debug: Start QEMU for RT",
-            "dependsOrder": "sequence",
-            "dependsOn": [
-                "Build for RT",
-                "stop-qemu",
-                "start-qemu-server"
+                "Build ESP"
             ],
             "problemMatcher": []
         },

@@ -21,19 +21,17 @@ jobs:
     - name: Build default EFI application
       run: make all
 
+    - name: Check kernel undefined symbols
+      run: make check-undef
+
+    - name: Build EFI system partition image
+      run: make efi-esp
+
     - name: Upload EFI artifact
       uses: actions/upload-artifact@v4
       with:
-        name: rvos-efi
-        path: build/efi/BOOTRISCV64.EFI
+        name: rvos-efi-artifacts
+        path: |
+          build/efi/BOOTRISCV64.EFI
+          build/kernel/kernel.elf
         if-no-files-found: error
-
-    - name: Build legacy OS image with Clang
-      run: |
-        make clean
-        make image
-
-    - name: Build legacy OS image with GCC
-      run: |
-        make clean
-        make image TOOLCHAIN=gcc

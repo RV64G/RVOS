@@ -13,10 +13,11 @@ gcc-riscv64-unknown-elf
 gdb-multiarch
 qemu-system-misc
 
+# FAT/ESP image creation for make efi-esp.
+dosfstools
+mtools
+
 # LLVM/Clang toolchain.
 clang
 llvm
 lld
-
-# U-Boot mkimage, used by the current Makefile to generate boot.scr.
-u-boot-tools

@@ -1,7 +1,6 @@
 # QEMU settings.
 
 QEMU ?= qemu-system-riscv64
-QFLAGS ?= -nographic -smp 4 -machine virt -cpu rv64,zba=true,zbb=true,zbc=true,zbs=true
 
 QEMU_EFI_CODE ?= /usr/share/edk2/riscv64/RISCV_VIRT_CODE.fd
 QEMU_EFI_VARS_TEMPLATE ?= /usr/share/edk2/riscv64/RISCV_VIRT_VARS.fd
