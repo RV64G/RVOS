@@ -16,8 +16,7 @@ static int boot_info_has(const struct kernel_boot_info *boot_info, uint64_t flag
 static void print_boot_flag(
     const struct kernel_boot_info *boot_info,
     const char *name,
-    uint64_t flag
-)
+    uint64_t flag)
 {
     early_puts("    ");
     early_puts(name);
@@ -61,24 +60,28 @@ static int validate_boot_info(const struct kernel_boot_info *boot_info)
      * 的字段：最终 EFI memory map、boot hart id、内核镜像范围和早期内核栈。
      * DTB 暂时不作为硬性要求，因为后面还要单独决定设备发现策略。
      */
-    if (!boot_info) {
+    if (!boot_info)
+    {
         early_puts("Boot info rejected: null pointer\r\n");
         return 0;
     }
 
-    if (boot_info->magic != KERNEL_BOOT_INFO_MAGIC) {
+    if (boot_info->magic != KERNEL_BOOT_INFO_MAGIC)
+    {
         early_puts("Boot info rejected: bad magic\r\n");
         early_print_field("magic", boot_info->magic);
         return 0;
     }
 
-    if (boot_info->version != KERNEL_BOOT_INFO_VERSION) {
+    if (boot_info->version != KERNEL_BOOT_INFO_VERSION)
+    {
         early_puts("Boot info rejected: unsupported version\r\n");
         early_print_field("version", boot_info->version);
         return 0;
     }
 
-    if (boot_info->size < sizeof(*boot_info)) {
+    if (boot_info->size < sizeof(*boot_info))
+    {
         early_puts("Boot info rejected: structure too small\r\n");
         early_print_field("size", boot_info->size);
         return 0;
@@ -89,7 +92,8 @@ static int validate_boot_info(const struct kernel_boot_info *boot_info)
         KERNEL_BOOT_HAS_BOOT_HART_ID |
         KERNEL_BOOT_HAS_KERNEL_IMAGE |
         KERNEL_BOOT_HAS_KERNEL_STACK;
-    if ((boot_info->flags & required_flags) != required_flags) {
+    if ((boot_info->flags & required_flags) != required_flags)
+    {
         early_puts("Boot info rejected: required flags missing\r\n");
         early_print_field("flags", boot_info->flags);
         return 0;
@@ -101,7 +105,8 @@ static int validate_boot_info(const struct kernel_boot_info *boot_info)
         boot_info->kernel_phys_base == 0 ||
         boot_info->kernel_size == 0 ||
         boot_info->kernel_stack_phys == 0 ||
-        boot_info->kernel_stack_size == 0) {
+        boot_info->kernel_stack_size == 0)
+    {
         early_puts("Boot info rejected: required range is empty\r\n");
         return 0;
     }
@@ -120,18 +125,22 @@ void kernel_entry(struct kernel_boot_info *boot_info)
 {
     sbi_console_puts("\r\nKernel ELF entered\r\n");
 
-    if (!validate_boot_info(boot_info)) {
+    if (!validate_boot_info(boot_info))
+    {
         early_halt_forever();
     }
 
     print_boot_info(boot_info);
-    if (!memory_probe(boot_info)) {
+    if (!memory_probe(boot_info))
+    {
         early_halt_forever();
     }
-    if (!page_allocator_init()) {
+    if (!page_allocator_init())
+    {
         early_halt_forever();
     }
-    if (!early_vm_enable(boot_info)) {
+    if (!early_vm_enable(boot_info))
+    {
         early_halt_forever();
     }
     early_halt_forever();

@@ -2,7 +2,9 @@
 #define MM_EARLY_VM_H
 
 #include "kernel_boot_info.h"
+#include "vm.h"
 
 int early_vm_enable(const struct kernel_boot_info *boot_info);
+struct vm_space *kernel_vm_space(void);
 
 #endif

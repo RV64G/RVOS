@@ -2,50 +2,8 @@
 
 #include "early_log.h"
 #include "boot_memory.h"
-#include "page_alloc.h"
+#include "vm.h"
 #include "early_vm.h"
-
-#define PAGE_SIZE 4096ULL
-#define PTE_COUNT 512ULL
-
-#define SV39_MODE 8ULL
-#define SATP_MODE_SHIFT 60
-
-/*
- * RISC-V Sv39 PTE 低 10 位保存权限和状态位，高位保存物理页号 PPN。
- *
- * V(valid) 表示这条 PTE 有效。R/W/X 同时全为 0 时，PTE 指向下一级页表；
- * 只要 R/W/X 至少有一位为 1，它就是叶子映射。
- *
- * A(accessed) 表示“这个页已经被访问过”，D(dirty) 表示“这个页已经被写过”。它们
- * 不是 cache 那样由硬件自动清零的状态位；通常是硬件或 OS 置 1，OS 在需要统计
- * 最近访问/写入情况时再主动清 0。RISC-V 允许两种实现：有的硬件会自动把 A/D 置 1，
- * 有的硬件会在 A/D 缺失时触发 page fault，让 OS 在异常处理里手动补位。
- *
- * 当前还没有 page fault handler，所以创建早期映射时预先置 A，并对可写页预先置 D。
- * 这样刚打开 satp 后，第一次取指、读 rodata、写 bss/栈不会因为 A/D 位缺失而进入
- * 目前还处理不了的异常。正式缺页异常接入后，可以再改成懒维护。
- */
-#define PTE_V (1ULL << 0)
-#define PTE_R (1ULL << 1)
-#define PTE_W (1ULL << 2)
-#define PTE_X (1ULL << 3)
-#define PTE_A (1ULL << 6)
-#define PTE_D (1ULL << 7)
-
-#define PTE_RX (PTE_R | PTE_X | PTE_A)
-#define PTE_RONLY (PTE_R | PTE_A)
-#define PTE_RW (PTE_R | PTE_W | PTE_A | PTE_D)
-
-#define PAGE_4K_SHIFT 12
-#define PAGE_2M_SHIFT 21
-#define PAGE_1G_SHIFT 30
-
-#define PAGE_4K_SIZE (1ULL << PAGE_4K_SHIFT)
-#define PAGE_2M_SIZE (1ULL << PAGE_2M_SHIFT)
-#define PAGE_1G_SIZE (1ULL << PAGE_1G_SHIFT)
-
-typedef uint64_t pte_t;
 
 extern char __kernel_text_start[];
 extern char __kernel_text_end[];
@@ -59,212 +17,47 @@ extern char __kernel_bss_end[];
 /*
  * early_vm 只负责“第一张能让内核继续跑的页表”。
  *
- * 它不是最终 mm/vm 层：这里没有用户页表、权限拆分、direct map 抽象，也没有缺页
- * 异常配合。当前目标是打开 Sv39 后，内核代码、当前栈、boot_info、最终 memory map
- * 和后续新分配的物理页仍然可访问。
+ * 真正的页表操作已经下沉到 vm.c。这里保留启动期职责：选择必须立即可访问的内核
+ * section、启动信息、DTB、EFI memory map 和当前可用物理内存，然后激活 Sv39。
  */
-static pte_t *kernel_root_table;
-static uint64_t mapped_ranges;
-static uint64_t mapped_pages;
-static uint64_t page_table_pages;
+static struct vm_space kernel_vm;
 
-static uint64_t align_down(uint64_t value, uint64_t align)
-{
-    return value & ~(align - 1);
-}
-
-static uint64_t align_up(uint64_t value, uint64_t align)
-{
-    return (value + align - 1) & ~(align - 1);
-}
-
-static int is_aligned(uint64_t value, uint64_t align)
-{
-    return (value & (align - 1)) == 0;
-}
-
-static uint64_t pte_to_phys(pte_t pte)
+static int map_kernel_sections(void)
 {
     /*
-     * PTE[53:10] 保存物理页号 PPN。转回物理地址时把 PPN 移回 4KB 页偏移上方。
+     * 链接脚本把这些 section 边界按 4KB 对齐。同一物理页只能有一条 PTE，因此如果
+     * text 和 rodata/data 混在同一页，就无法可靠地拆权限。
      */
-    return (pte >> 10) << PAGE_4K_SHIFT;
-}
-
-static pte_t phys_to_pte(uint64_t phys, uint64_t flags)
-{
-    /*
-     * 物理地址先去掉 12 位页内偏移，变成 PPN，再放到 PTE[53:10]。
-     * flags 只占低位权限/状态位。
-     */
-    return ((phys >> PAGE_4K_SHIFT) << 10) | flags;
-}
-
-static uint64_t vpn_index(uint64_t va, int level)
-{
-    /*
-     * Sv39 把虚拟页号拆成三级索引：
-     *
-     * level 2: VA[38:30]，根页表索引
-     * level 1: VA[29:21]，中间页表索引
-     * level 0: VA[20:12]，最低级页表索引
-     *
-     * 每张页表 4KB，512 项，每项 8 字节，索引宽度固定是 9 bit。
-     */
-    return (va >> (PAGE_4K_SHIFT + 9 * level)) & (PTE_COUNT - 1);
-}
-
-static void zero_page(void *page)
-{
-    uint64_t *words = (uint64_t *)page;
-    for (uint64_t i = 0; i < PAGE_SIZE / sizeof(uint64_t); i++)
-    {
-        words[i] = 0;
-    }
-}
-
-static pte_t *allocate_page_table(void)
-{
-    void *page = phys_alloc_pages(1);
-    if (!page)
-    {
+    if (!vm_identity_map(
+            &kernel_vm,
+            (uint64_t)(uintptr_t)__kernel_text_start,
+            (uint64_t)(__kernel_text_end - __kernel_text_start),
+            VM_MAP_READ | VM_MAP_EXEC)) {
         return 0;
     }
 
-    /*
-     * 打开 Sv39 之前，当前执行环境仍是物理地址直通。phys_alloc_pages() 返回的
-     * 物理页可以直接当指针清零。打开页表之后，CPU page walker 也按物理地址读取
-     * 页表页，所以页表页本身不需要再“转换成虚拟指针”才能被硬件使用。
-     */
-    zero_page(page);
-    page_table_pages++;
-    return (pte_t *)page;
-}
-
-static int ensure_next_table(pte_t *table, uint64_t index, pte_t **next)
-{
-    /*
-     * map_leaf() 从根页表一路走到目标 level。中间层 PTE 必须指向“下一张页表”。
-     * ensure_next_table() 做的就是：
-     *
-     * 1. 如果 table[index] 已经是一个非叶子 PTE，就取出它指向的下一级页表；
-     * 2. 如果 table[index] 为空，就分配一页新的页表页，写成非叶子 PTE；
-     * 3. 如果 table[index] 已经是叶子映射，说明这里不能再往下挂页表，拒绝。
-     *
-     * 例子：要映射一个 4KB 页，就需要 level2 -> level1 -> level0。前两级如果不
-     * 存在，就由这个函数补出来。
-     */
-    pte_t pte = table[index];
-    if (pte & PTE_V)
-    {
-        /*
-         * 当前阶段只由本文件创建页表。如果这里已经是叶子映射，说明调用者试图在
-         * 已映射的大页下面继续拆小页，第一版直接拒绝，避免静默覆盖映射。
-         */
-        if (pte & (PTE_R | PTE_W | PTE_X))
-        {
-            return 0;
-        }
-
-        *next = (pte_t *)(uintptr_t)pte_to_phys(pte);
-        return 1;
-    }
-
-    pte_t *new_table = allocate_page_table();
-    if (!new_table)
-    {
+    if (!vm_identity_map(
+            &kernel_vm,
+            (uint64_t)(uintptr_t)__kernel_rodata_start,
+            (uint64_t)(__kernel_rodata_end - __kernel_rodata_start),
+            VM_MAP_READ)) {
         return 0;
     }
 
-    table[index] = phys_to_pte((uint64_t)(uintptr_t)new_table, PTE_V);
-    *next = new_table;
-    return 1;
-}
-
-static int map_leaf(uint64_t va, uint64_t pa, uint64_t page_size, int level, uint64_t flags)
-{
-    /*
-     * 在指定 level 写入叶子 PTE：
-     *
-     * level 2 leaf: 1GB 映射
-     * level 1 leaf: 2MB 映射
-     * level 0 leaf: 4KB 映射
-     *
-     * 中间层如果不存在，就通过 ensure_next_table() 创建；最终 level 的 PTE 写入
-     * pa + 权限位，成为真正的地址映射。flags 不包含 PTE_V，PTE_V 由这里统一补上。
-     */
-    pte_t *table = kernel_root_table;
-
-    for (int current = 2; current > level; current--)
-    {
-        uint64_t index = vpn_index(va, current);
-        if (!ensure_next_table(table, index, &table))
-        {
-            return 0;
-        }
-    }
-
-    uint64_t index = vpn_index(va, level);
-    if (table[index] & PTE_V)
-    {
+    if (!vm_identity_map(
+            &kernel_vm,
+            (uint64_t)(uintptr_t)__kernel_data_start,
+            (uint64_t)(__kernel_data_end - __kernel_data_start),
+            VM_MAP_READ | VM_MAP_WRITE)) {
         return 0;
     }
 
-    /*
-     * 权限在调用点决定：内核 text 映成 R/X，rodata 映成 R，data/bss/栈/普通页映成
-     * R/W。这里不再默认给 X，避免数据页可执行。
-     */
-    table[index] = phys_to_pte(pa, PTE_V | flags);
-    mapped_pages += page_size / PAGE_SIZE;
-    return 1;
-}
-
-static int identity_map_range(uint64_t start, uint64_t size, uint64_t flags)
-{
-    /*
-     * 恒等映射一段物理内存：VA == PA。
-     *
-     * 这里优先使用能覆盖当前地址的最大页大小。地址和剩余长度都满足 1GB 对齐时用
-     * 1GB leaf；否则尝试 2MB leaf；最后退到 4KB leaf。这样映射大块 RAM 时不会为
-     * 每个 4KB 页都建立最低级 PTE。
-     */
-    if (size == 0)
-    {
-        return 1;
-    }
-
-    uint64_t va = align_down(start, PAGE_SIZE);
-    uint64_t end = align_up(start + size, PAGE_SIZE);
-    mapped_ranges++;
-
-    while (va < end)
-    {
-        uint64_t remaining = end - va;
-        if (remaining >= PAGE_1G_SIZE && is_aligned(va, PAGE_1G_SIZE))
-        {
-            if (!map_leaf(va, va, PAGE_1G_SIZE, 2, flags))
-            {
-                return 0;
-            }
-            va += PAGE_1G_SIZE;
-            continue;
-        }
-
-        if (remaining >= PAGE_2M_SIZE && is_aligned(va, PAGE_2M_SIZE))
-        {
-            if (!map_leaf(va, va, PAGE_2M_SIZE, 1, flags))
-            {
-                return 0;
-            }
-            va += PAGE_2M_SIZE;
-            continue;
-        }
-
-        if (!map_leaf(va, va, PAGE_4K_SIZE, 0, flags))
-        {
-            return 0;
-        }
-        va += PAGE_4K_SIZE;
+    if (!vm_identity_map(
+            &kernel_vm,
+            (uint64_t)(uintptr_t)__kernel_bss_start,
+            (uint64_t)(__kernel_bss_end - __kernel_bss_start),
+            VM_MAP_READ | VM_MAP_WRITE)) {
+        return 0;
     }
 
     return 1;
@@ -280,63 +73,38 @@ static int map_boot_info_ranges(const struct kernel_boot_info *boot_info)
      * EFI memory map    : memory_state/page allocator 的来源
      * DTB               : 后续设备发现会用到
      */
-    if (!identity_map_range(boot_info->kernel_stack_phys, boot_info->kernel_stack_size, PTE_RW))
-    {
-        return 0;
-    }
-    if (!identity_map_range(boot_info->boot_info_phys, boot_info->boot_info_size, PTE_RW))
-    {
-        return 0;
-    }
-    if (!identity_map_range(boot_info->efi_memory_map_phys, boot_info->efi_memory_map_size, PTE_RONLY))
-    {
+    if (!vm_identity_map(
+            &kernel_vm,
+            boot_info->kernel_stack_phys,
+            boot_info->kernel_stack_size,
+            VM_MAP_READ | VM_MAP_WRITE)) {
         return 0;
     }
 
-    if ((boot_info->flags & KERNEL_BOOT_HAS_DTB) != 0)
-    {
-        if (!identity_map_range(boot_info->dtb_phys, boot_info->dtb_size, PTE_RONLY))
-        {
+    if (!vm_identity_map(
+            &kernel_vm,
+            boot_info->boot_info_phys,
+            boot_info->boot_info_size,
+            VM_MAP_READ | VM_MAP_WRITE)) {
+        return 0;
+    }
+
+    if (!vm_identity_map(
+            &kernel_vm,
+            boot_info->efi_memory_map_phys,
+            boot_info->efi_memory_map_size,
+            VM_MAP_READ)) {
+        return 0;
+    }
+
+    if ((boot_info->flags & KERNEL_BOOT_HAS_DTB) != 0) {
+        if (!vm_identity_map(
+                &kernel_vm,
+                boot_info->dtb_phys,
+                boot_info->dtb_size,
+                VM_MAP_READ)) {
             return 0;
         }
-    }
-
-    return 1;
-}
-
-static int map_kernel_sections(void)
-{
-    /*
-     * 链接脚本把这些 section 边界按 4KB 对齐。同一物理页只能有一条 PTE，因此如果
-     * text 和 rodata/data 混在同一页，就无法可靠地拆权限。
-     */
-    if (!identity_map_range(
-            (uint64_t)(uintptr_t)__kernel_text_start,
-            (uint64_t)(__kernel_text_end - __kernel_text_start),
-            PTE_RX))
-    {
-        return 0;
-    }
-    if (!identity_map_range(
-            (uint64_t)(uintptr_t)__kernel_rodata_start,
-            (uint64_t)(__kernel_rodata_end - __kernel_rodata_start),
-            PTE_RONLY))
-    {
-        return 0;
-    }
-    if (!identity_map_range(
-            (uint64_t)(uintptr_t)__kernel_data_start,
-            (uint64_t)(__kernel_data_end - __kernel_data_start),
-            PTE_RW))
-    {
-        return 0;
-    }
-    if (!identity_map_range(
-            (uint64_t)(uintptr_t)__kernel_bss_start,
-            (uint64_t)(__kernel_bss_end - __kernel_bss_start),
-            PTE_RW))
-    {
-        return 0;
     }
 
     return 1;
@@ -347,15 +115,13 @@ static int map_known_physical_memory(void)
     /*
      * 后续打开 Sv39 后，物理页分配器仍会返回“物理页地址”。在正式引入
      * phys_to_virt/direct map 边界之前，先把当前认为可用的物理区间恒等映射，
-     * 确保新分配的页仍能被早期内核代码访问。
+     * 确保新分配的页仍能被内核代码访问。
      */
     const struct boot_memory_state *memory = memory_state();
-    for (uint64_t i = 0; i < memory->usable_range_count; i++)
-    {
+    for (uint64_t i = 0; i < memory->usable_range_count; i++) {
         uint64_t start = memory->usable_ranges[i].start;
         uint64_t size = memory->usable_ranges[i].end - memory->usable_ranges[i].start;
-        if (!identity_map_range(start, size, PTE_RW))
-        {
+        if (!vm_identity_map(&kernel_vm, start, size, VM_MAP_READ | VM_MAP_WRITE)) {
             return 0;
         }
     }
@@ -363,52 +129,40 @@ static int map_known_physical_memory(void)
     return 1;
 }
 
-static void write_satp(uint64_t value)
+struct vm_space *kernel_vm_space(void)
 {
-    /*
-     * 写 satp 前后都执行 sfence.vma。前一次清掉旧地址转换缓存影响，后一次让新页表
-     * 对后续取指和访存立即生效。
-     */
-    __asm__ volatile("sfence.vma zero, zero" ::: "memory");
-    __asm__ volatile("csrw satp, %0" ::"r"(value) : "memory");
-    __asm__ volatile("sfence.vma zero, zero" ::: "memory");
+    return &kernel_vm;
 }
 
 int early_vm_enable(const struct kernel_boot_info *boot_info)
 {
-    kernel_root_table = allocate_page_table();
-    if (!kernel_root_table)
-    {
+    if (!vm_space_create(&kernel_vm)) {
         early_puts("Kernel page table allocation failed\r\n");
         return 0;
     }
 
-    if (!map_kernel_sections())
-    {
+    if (!map_kernel_sections()) {
         early_puts("Kernel section mapping failed\r\n");
         return 0;
     }
-    if (!map_boot_info_ranges(boot_info))
-    {
+    if (!map_boot_info_ranges(boot_info)) {
         early_puts("Kernel boot ranges mapping failed\r\n");
         return 0;
     }
-    if (!map_known_physical_memory())
-    {
+    if (!map_known_physical_memory()) {
         early_puts("Kernel memory ranges mapping failed\r\n");
         return 0;
     }
 
-    uint64_t root_phys = (uint64_t)(uintptr_t)kernel_root_table;
-    uint64_t satp = (SV39_MODE << SATP_MODE_SHIFT) | (root_phys >> PAGE_4K_SHIFT);
+    uint64_t root_phys = (uint64_t)(uintptr_t)kernel_vm.root_table;
 
     early_puts("Kernel page table prepared\r\n");
     early_print_field("root_table", root_phys);
-    early_print_field("page_table_pages", page_table_pages);
-    early_print_field("mapped_ranges", mapped_ranges);
-    early_print_field("mapped_pages", mapped_pages);
+    early_print_field("page_table_pages", kernel_vm.page_table_pages);
+    early_print_field("mapped_ranges", kernel_vm.mapped_ranges);
+    early_print_field("mapped_pages", kernel_vm.mapped_pages);
 
-    write_satp(satp);
+    vm_activate_sv39(&kernel_vm);
 
     early_puts("Kernel Sv39 enabled\r\n");
     return 1;
