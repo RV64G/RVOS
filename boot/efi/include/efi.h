@@ -1,5 +1,5 @@
-#ifndef RVOS_EFI_H
-#define RVOS_EFI_H
+#ifndef EFI_H
+#define EFI_H
 
 #include <stdint.h>
 

@@ -1,5 +1,5 @@
-#ifndef RVOS_KERNEL_EFI_EARLY_LOG_H
-#define RVOS_KERNEL_EFI_EARLY_LOG_H
+#ifndef KERNEL_EARLY_LOG_H
+#define KERNEL_EARLY_LOG_H
 
 #include <stdint.h>
 

@@ -81,10 +81,10 @@ static EFI_STATUS get_boot_hart_id(efi_system_table_t *st, uint64_t *boot_hart_i
     return EFI_SUCCESS;
 }
 
-static void init_boot_info(struct rvos_boot_info *boot_info)
+static void init_boot_info(struct kernel_boot_info *boot_info)
 {
-    boot_info->magic = RVOS_BOOT_INFO_MAGIC;
-    boot_info->version = RVOS_BOOT_INFO_VERSION;
+    boot_info->magic = KERNEL_BOOT_INFO_MAGIC;
+    boot_info->version = KERNEL_BOOT_INFO_VERSION;
     boot_info->size = sizeof(*boot_info);
     boot_info->flags = 0;
 
@@ -112,7 +112,7 @@ static void init_boot_info(struct rvos_boot_info *boot_info)
 EFI_STATUS efi_collect_boot_info(
     EFI_HANDLE image_handle,
     efi_system_table_t *st,
-    struct rvos_boot_info *boot_info,
+    struct kernel_boot_info *boot_info,
     efi_memory_map_info_t *memory_map
 )
 {
@@ -124,14 +124,14 @@ EFI_STATUS efi_collect_boot_info(
     if (dtb) {
         boot_info->dtb_phys = (uint64_t)(uintptr_t)dtb;
         boot_info->dtb_size = be32_to_cpu(dtb[1]);
-        boot_info->flags |= RVOS_BOOT_HAS_DTB;
+        boot_info->flags |= KERNEL_BOOT_HAS_DTB;
     }
 
     EFI_STATUS status = get_boot_hart_id(st, &boot_info->boot_hart_id);
     if (status != EFI_SUCCESS) {
         return status;
     }
-    boot_info->flags |= RVOS_BOOT_HAS_BOOT_HART_ID;
+    boot_info->flags |= KERNEL_BOOT_HAS_BOOT_HART_ID;
 
     status = efi_get_memory_map(st, memory_map);
     if (status != EFI_SUCCESS) {
@@ -142,12 +142,12 @@ EFI_STATUS efi_collect_boot_info(
     boot_info->efi_memory_map_size = memory_map->size;
     boot_info->efi_descriptor_size = memory_map->descriptor_size;
     boot_info->efi_descriptor_version = memory_map->descriptor_version;
-    boot_info->flags |= RVOS_BOOT_HAS_EFI_MEMORY_MAP;
+    boot_info->flags |= KERNEL_BOOT_HAS_EFI_MEMORY_MAP;
 
     return EFI_SUCCESS;
 }
 
-void efi_print_boot_info(efi_system_table_t *st, const struct rvos_boot_info *boot_info)
+void efi_print_boot_info(efi_system_table_t *st, const struct kernel_boot_info *boot_info)
 {
     efi_puts(st, L"Boot info: magic=");
     efi_print_hex64(st, boot_info->magic);

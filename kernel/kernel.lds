@@ -1,5 +1,5 @@
 OUTPUT_ARCH(riscv)
-ENTRY(rvos_kernel_entry)
+ENTRY(kernel_entry)
 
 SECTIONS
 {

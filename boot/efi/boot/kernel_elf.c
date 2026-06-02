@@ -123,23 +123,23 @@ static void byte_copy(void *dst, const void *src, UINTN size)
  */
 static EFI_STATUS open_kernel_path(efi_file_protocol_t *root, efi_file_protocol_t **file)
 {
-    efi_file_protocol_t *rvos_dir = 0;
+    efi_file_protocol_t *os_dir = 0;
     EFI_STATUS status = root->open(
         root,
-        &rvos_dir,
+        &os_dir,
         L"RVOS",
         EFI_FILE_MODE_READ,
         0
     );
     if (status == EFI_SUCCESS) {
-        status = rvos_dir->open(
-            rvos_dir,
+        status = os_dir->open(
+            os_dir,
             file,
             L"KERNEL.ELF",
             EFI_FILE_MODE_READ,
             0
         );
-        rvos_dir->close(rvos_dir);
+        os_dir->close(os_dir);
         if (status == EFI_SUCCESS) {
             return EFI_SUCCESS;
         }

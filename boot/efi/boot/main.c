@@ -8,7 +8,7 @@
 __attribute__((section(".reloc"), used))
 static const unsigned int base_reloc_block[] = { 0, 8 };
 
-#define RVOS_KERNEL_STACK_SIZE (32ULL * 1024ULL)
+#define KERNEL_STACK_SIZE (32ULL * 1024ULL)
 
 static void print_status(
     efi_system_table_t *system_table,
@@ -22,7 +22,7 @@ static void print_status(
 }
 
 static void update_boot_info_memory_map(
-    struct rvos_boot_info *boot_info,
+    struct kernel_boot_info *boot_info,
     const efi_memory_map_info_t *memory_map
 )
 {
@@ -30,7 +30,7 @@ static void update_boot_info_memory_map(
     boot_info->efi_memory_map_size = memory_map->size;
     boot_info->efi_descriptor_size = memory_map->descriptor_size;
     boot_info->efi_descriptor_version = memory_map->descriptor_version;
-    boot_info->flags |= RVOS_BOOT_HAS_EFI_MEMORY_MAP;
+    boot_info->flags |= KERNEL_BOOT_HAS_EFI_MEMORY_MAP;
 }
 
 /*
@@ -45,7 +45,7 @@ static void update_boot_info_memory_map(
  */
 EFI_STATUS efi_main(EFI_HANDLE image_handle, efi_system_table_t *system_table)
 {
-    struct rvos_boot_info *boot_info = 0;
+    struct kernel_boot_info *boot_info = 0;
     UINTN boot_info_pages = 0;
     void *kernel_stack_base = 0;
     UINTN kernel_stack_pages = 0;
@@ -55,7 +55,7 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, efi_system_table_t *system_table)
 
     EFI_STATUS status = efi_allocate_pages(
         system_table,
-        sizeof(struct rvos_boot_info),
+        sizeof(struct kernel_boot_info),
         (void **)&boot_info,
         &boot_info_pages
     );
@@ -66,7 +66,7 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, efi_system_table_t *system_table)
 
     status = efi_allocate_pages(
         system_table,
-        RVOS_KERNEL_STACK_SIZE,
+        KERNEL_STACK_SIZE,
         &kernel_stack_base,
         &kernel_stack_pages
     );
@@ -86,7 +86,7 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, efi_system_table_t *system_table)
 
     boot_info->kernel_stack_phys = (uint64_t)(uintptr_t)kernel_stack_base;
     boot_info->kernel_stack_size = kernel_stack_pages * EFI_PAGE_SIZE;
-    boot_info->flags |= RVOS_BOOT_HAS_KERNEL_STACK;
+    boot_info->flags |= KERNEL_BOOT_HAS_KERNEL_STACK;
 
     efi_print_boot_info(system_table, boot_info);
     efi_print_memory_map(system_table, &memory_map);
@@ -111,7 +111,7 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, efi_system_table_t *system_table)
 
     boot_info->kernel_phys_base = kernel_load_start;
     boot_info->kernel_size = kernel_load_size;
-    boot_info->flags |= RVOS_BOOT_HAS_KERNEL_IMAGE;
+    boot_info->flags |= KERNEL_BOOT_HAS_KERNEL_IMAGE;
 
     /*
      * 打印和释放临时 map 都可能改变 memory map。正式交接前必须重新读取最后一版，
@@ -144,7 +144,7 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, efi_system_table_t *system_table)
      * 进入内核前把 sp 设到高地址栈顶；栈按 ABI 约定向低地址增长。
      */
     uint8_t *stack_top = (uint8_t *)kernel_stack_base + boot_info->kernel_stack_size;
-    rvos_jump_to_kernel((void *)(uintptr_t)kernel_entry, stack_top, boot_info);
+    jump_to_kernel((void *)(uintptr_t)kernel_entry, stack_top, boot_info);
 
     return EFI_SUCCESS;
 }

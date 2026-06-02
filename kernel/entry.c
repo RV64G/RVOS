@@ -1,24 +1,30 @@
 #include "early_log.h"
-#include "memory.h"
-#include "rvos/boot_info.h"
+#include "boot_memory.h"
+#include "page_alloc.h"
+#include "early_vm.h"
+#include "kernel_boot_info.h"
 
-static int boot_has(const struct rvos_boot_info *boot_info, uint64_t flag)
+/*
+ * boot_info->flags 是一个 bitset。loader 只有在某类启动信息有效时才会置位，
+ * 内核打印和校验时用这个 helper 判断“这项信息是否真的可用”。
+ */
+static int boot_info_has(const struct kernel_boot_info *boot_info, uint64_t flag)
 {
     return (boot_info->flags & flag) != 0;
 }
 
 static void print_boot_flag(
-    const struct rvos_boot_info *boot_info,
+    const struct kernel_boot_info *boot_info,
     const char *name,
     uint64_t flag
 )
 {
     early_puts("    ");
     early_puts(name);
-    early_puts(boot_has(boot_info, flag) ? ": yes\r\n" : ": no\r\n");
+    early_puts(boot_info_has(boot_info, flag) ? ": yes\r\n" : ": no\r\n");
 }
 
-static void print_boot_info(const struct rvos_boot_info *boot_info)
+static void print_boot_info(const struct kernel_boot_info *boot_info)
 {
     early_puts("Boot info accepted\r\n");
     early_print_field("magic", boot_info->magic);
@@ -27,11 +33,11 @@ static void print_boot_info(const struct rvos_boot_info *boot_info)
     early_print_field("flags", boot_info->flags);
 
     early_puts("  flags detail:\r\n");
-    print_boot_flag(boot_info, "dtb", RVOS_BOOT_HAS_DTB);
-    print_boot_flag(boot_info, "efi_memory_map", RVOS_BOOT_HAS_EFI_MEMORY_MAP);
-    print_boot_flag(boot_info, "boot_hart_id", RVOS_BOOT_HAS_BOOT_HART_ID);
-    print_boot_flag(boot_info, "kernel_image", RVOS_BOOT_HAS_KERNEL_IMAGE);
-    print_boot_flag(boot_info, "kernel_stack", RVOS_BOOT_HAS_KERNEL_STACK);
+    print_boot_flag(boot_info, "dtb", KERNEL_BOOT_HAS_DTB);
+    print_boot_flag(boot_info, "efi_memory_map", KERNEL_BOOT_HAS_EFI_MEMORY_MAP);
+    print_boot_flag(boot_info, "boot_hart_id", KERNEL_BOOT_HAS_BOOT_HART_ID);
+    print_boot_flag(boot_info, "kernel_image", KERNEL_BOOT_HAS_KERNEL_IMAGE);
+    print_boot_flag(boot_info, "kernel_stack", KERNEL_BOOT_HAS_KERNEL_STACK);
 
     early_print_field("boot_hart_id", boot_info->boot_hart_id);
     early_print_field("dtb_phys", boot_info->dtb_phys);
@@ -48,7 +54,7 @@ static void print_boot_info(const struct rvos_boot_info *boot_info)
     early_print_field("kernel_stack_size", boot_info->kernel_stack_size);
 }
 
-static int validate_boot_info(const struct rvos_boot_info *boot_info)
+static int validate_boot_info(const struct kernel_boot_info *boot_info)
 {
     /*
      * boot_info 是 EFI loader 和内核之间的启动 ABI。这里先只校验进入内核必须依赖
@@ -60,13 +66,13 @@ static int validate_boot_info(const struct rvos_boot_info *boot_info)
         return 0;
     }
 
-    if (boot_info->magic != RVOS_BOOT_INFO_MAGIC) {
+    if (boot_info->magic != KERNEL_BOOT_INFO_MAGIC) {
         early_puts("Boot info rejected: bad magic\r\n");
         early_print_field("magic", boot_info->magic);
         return 0;
     }
 
-    if (boot_info->version != RVOS_BOOT_INFO_VERSION) {
+    if (boot_info->version != KERNEL_BOOT_INFO_VERSION) {
         early_puts("Boot info rejected: unsupported version\r\n");
         early_print_field("version", boot_info->version);
         return 0;
@@ -79,10 +85,10 @@ static int validate_boot_info(const struct rvos_boot_info *boot_info)
     }
 
     uint64_t required_flags =
-        RVOS_BOOT_HAS_EFI_MEMORY_MAP |
-        RVOS_BOOT_HAS_BOOT_HART_ID |
-        RVOS_BOOT_HAS_KERNEL_IMAGE |
-        RVOS_BOOT_HAS_KERNEL_STACK;
+        KERNEL_BOOT_HAS_EFI_MEMORY_MAP |
+        KERNEL_BOOT_HAS_BOOT_HART_ID |
+        KERNEL_BOOT_HAS_KERNEL_IMAGE |
+        KERNEL_BOOT_HAS_KERNEL_STACK;
     if ((boot_info->flags & required_flags) != required_flags) {
         early_puts("Boot info rejected: required flags missing\r\n");
         early_print_field("flags", boot_info->flags);
@@ -110,15 +116,23 @@ static int validate_boot_info(const struct rvos_boot_info *boot_info)
  * 打印最早期日志。等内核接管设备和内存后，这些临时打印函数应该退到正式 printk
  * 后面，入口也会继续拆出 arch 级初始化和通用内核初始化。
  */
-void rvos_kernel_entry(struct rvos_boot_info *boot_info)
+void kernel_entry(struct kernel_boot_info *boot_info)
 {
-    sbi_console_puts("\r\nRVOS kernel ELF entered\r\n");
+    sbi_console_puts("\r\nKernel ELF entered\r\n");
 
     if (!validate_boot_info(boot_info)) {
         early_halt_forever();
     }
 
     print_boot_info(boot_info);
-    rvos_early_memory_probe(boot_info);
+    if (!memory_probe(boot_info)) {
+        early_halt_forever();
+    }
+    if (!page_allocator_init()) {
+        early_halt_forever();
+    }
+    if (!early_vm_enable(boot_info)) {
+        early_halt_forever();
+    }
     early_halt_forever();
 }
