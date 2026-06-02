@@ -39,25 +39,6 @@ void efi_free_pages(efi_system_table_t *st, void *buffer, UINTN pages)
     }
 }
 
-static void print_memory_descriptor(
-    efi_system_table_t *st,
-    UINTN index,
-    const efi_memory_descriptor_t *desc
-)
-{
-    efi_puts(st, L"  [");
-    efi_print_u64(st, index);
-    efi_puts(st, L"] type=");
-    efi_print_u64(st, desc->type);
-    efi_puts(st, L", phys=");
-    efi_print_hex64(st, desc->physical_start);
-    efi_puts(st, L", pages=");
-    efi_print_u64(st, desc->number_of_pages);
-    efi_puts(st, L", attr=");
-    efi_print_hex64(st, desc->attribute);
-    efi_puts(st, L"\r\n");
-}
-
 /*
  * 分配 memory map buffer 本身会改变 memory map，所以读取必须允许重试。
  * 正式传给内核的 memory map 按页保存，内核接手后可以直接把这几页标为已占用。
@@ -128,22 +109,28 @@ void efi_free_memory_map(efi_system_table_t *st, efi_memory_map_info_t *info)
 
 void efi_print_memory_map(efi_system_table_t *st, const efi_memory_map_info_t *info)
 {
+    UINTN entries = info->size / info->descriptor_size;
+    uint64_t conventional_pages = 0;
+    for (UINTN i = 0; i < entries; i++) {
+        uint8_t *entry = (uint8_t *)info->buffer + i * info->descriptor_size;
+        efi_memory_descriptor_t *desc = (efi_memory_descriptor_t *)entry;
+        if (desc->type == EFI_CONVENTIONAL_MEMORY) {
+            conventional_pages += desc->number_of_pages;
+        }
+    }
+
     efi_puts(st, L"Memory map: ");
     efi_puts(st, L"size=");
     efi_print_u64(st, info->size);
     efi_puts(st, L", desc_size=");
     efi_print_u64(st, info->descriptor_size);
     efi_puts(st, L", entries=");
-    efi_print_u64(st, info->size / info->descriptor_size);
+    efi_print_u64(st, entries);
     efi_puts(st, L", version=");
     efi_print_u64(st, info->descriptor_version);
     efi_puts(st, L", key=");
     efi_print_hex64(st, info->map_key);
+    efi_puts(st, L", conventional_pages=");
+    efi_print_u64(st, conventional_pages);
     efi_puts(st, L"\r\n");
-
-    UINTN entries = info->size / info->descriptor_size;
-    for (UINTN i = 0; i < entries; i++) {
-        uint8_t *entry = (uint8_t *)info->buffer + i * info->descriptor_size;
-        print_memory_descriptor(st, i, (efi_memory_descriptor_t *)entry);
-    }
 }

@@ -433,6 +433,7 @@ static EFI_STATUS load_segments(
  *
  * - kernel ELF 的 PT_LOAD 段已经位于它声明的物理地址；
  * - *entry 是 ELF header 里的入口地址；
+ * - *load_start / *load_size 描述内核镜像占用的页对齐物理范围；
  * - 临时文件 buffer 已释放；
  * - 已装载的内核页不会释放，后续由 RVOS 根据 boot_info/memory map 接管。
  *
@@ -452,7 +453,9 @@ static EFI_STATUS load_segments(
 EFI_STATUS efi_load_kernel_elf(
     EFI_HANDLE image_handle,
     efi_system_table_t *st,
-    uint64_t *entry
+    uint64_t *entry,
+    uint64_t *load_start_out,
+    uint64_t *load_size_out
 )
 {
     efi_file_protocol_t *file = 0;
@@ -488,6 +491,8 @@ EFI_STATUS efi_load_kernel_elf(
         status = load_segments(st, buffer, ehdr, phdrs, load_start, load_end);
         if (status == EFI_SUCCESS) {
             *entry = ehdr->e_entry;
+            *load_start_out = load_start;
+            *load_size_out = load_end - load_start;
         }
     }
 

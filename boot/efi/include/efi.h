@@ -17,6 +17,7 @@ typedef unsigned short CHAR16;
 
 /* AllocatePool/AllocatePages 使用的内存类型。当前启动器自己的数据用 LoaderData。 */
 #define EFI_LOADER_DATA 2
+#define EFI_CONVENTIONAL_MEMORY 7
 #define EFI_ALLOCATE_ANY_PAGES 0
 #define EFI_ALLOCATE_ADDRESS 2
 #define EFI_PAGE_SIZE 4096ULL

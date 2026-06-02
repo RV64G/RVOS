@@ -14,7 +14,9 @@ void efi_print_boot_info(efi_system_table_t *st, const struct rvos_boot_info *bo
 EFI_STATUS efi_load_kernel_elf(
     EFI_HANDLE image_handle,
     efi_system_table_t *st,
-    uint64_t *entry
+    uint64_t *entry,
+    uint64_t *load_start,
+    uint64_t *load_size
 );
 
 void rvos_jump_to_kernel(

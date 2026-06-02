@@ -94,12 +94,24 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, efi_system_table_t *system_table)
     efi_free_memory_map(system_table, &memory_map);
 
     uint64_t kernel_entry = 0;
-    status = efi_load_kernel_elf(image_handle, system_table, &kernel_entry);
+    uint64_t kernel_load_start = 0;
+    uint64_t kernel_load_size = 0;
+    status = efi_load_kernel_elf(
+        image_handle,
+        system_table,
+        &kernel_entry,
+        &kernel_load_start,
+        &kernel_load_size
+    );
     if (status != EFI_SUCCESS) {
         efi_free_pages(system_table, kernel_stack_base, kernel_stack_pages);
         efi_free_pages(system_table, boot_info, boot_info_pages);
         return status;
     }
+
+    boot_info->kernel_phys_base = kernel_load_start;
+    boot_info->kernel_size = kernel_load_size;
+    boot_info->flags |= RVOS_BOOT_HAS_KERNEL_IMAGE;
 
     /*
      * 打印和释放临时 map 都可能改变 memory map。正式交接前必须重新读取最后一版，
