@@ -137,10 +137,13 @@ static const struct efi_memory_descriptor *descriptor_at(
 
 static void print_memory_state(void)
 {
+    uint64_t available_pages = memory_available_pages();
+
     early_puts("EFI memory map accepted\r\n");
     early_print_field("entries", state.entries);
     early_print_field("descriptor_size", state.descriptor_size);
     early_print_field("conventional_pages", state.conventional_pages);
+    early_print_dec_field("conventional_mib", state.conventional_pages / 256);
     early_print_field("loader_pages", state.loader_pages);
     early_print_field("boot_services_pages", state.boot_services_pages);
     early_print_field("runtime_pages", state.runtime_pages);
@@ -160,7 +163,8 @@ static void print_memory_state(void)
 
     early_puts("Boot usable conventional ranges\r\n");
     early_print_field("range_count", state.usable_range_count);
-    early_print_field("available_pages", memory_available_pages());
+    early_print_field("available_pages", available_pages);
+    early_print_dec_field("available_mib", available_pages / 256);
     for (uint64_t i = 0; i < state.usable_range_count; i++) {
         print_range("usable", state.usable_ranges[i].start, state.usable_ranges[i].end);
     }

@@ -15,9 +15,16 @@
  * RISC-V Sv39 PTE 低 10 位保存权限和状态位，高位保存物理页号 PPN。
  *
  * V(valid) 表示这条 PTE 有效。R/W/X 同时全为 0 时，PTE 指向下一级页表；
- * 只要 R/W/X 至少有一位为 1，它就是叶子映射。A(accessed) 和 D(dirty)
- * 由硬件或异常处理路径维护。当前第一版页表先直接置 A/D，避免刚打开页表就因为
- * 访问/写入状态位缺失而进入缺页处理；正式缺页异常接入后可以再改成懒维护。
+ * 只要 R/W/X 至少有一位为 1，它就是叶子映射。
+ *
+ * A(accessed) 表示“这个页已经被访问过”，D(dirty) 表示“这个页已经被写过”。它们
+ * 不是 cache 那样由硬件自动清零的状态位；通常是硬件或 OS 置 1，OS 在需要统计
+ * 最近访问/写入情况时再主动清 0。RISC-V 允许两种实现：有的硬件会自动把 A/D 置 1，
+ * 有的硬件会在 A/D 缺失时触发 page fault，让 OS 在异常处理里手动补位。
+ *
+ * 当前还没有 page fault handler，所以创建早期映射时预先置 A，并对可写页预先置 D。
+ * 这样刚打开 satp 后，第一次取指、读 rodata、写 bss/栈不会因为 A/D 位缺失而进入
+ * 目前还处理不了的异常。正式缺页异常接入后，可以再改成懒维护。
  */
 #define PTE_V (1ULL << 0)
 #define PTE_R (1ULL << 1)
@@ -25,6 +32,10 @@
 #define PTE_X (1ULL << 3)
 #define PTE_A (1ULL << 6)
 #define PTE_D (1ULL << 7)
+
+#define PTE_RX (PTE_R | PTE_X | PTE_A)
+#define PTE_RONLY (PTE_R | PTE_A)
+#define PTE_RW (PTE_R | PTE_W | PTE_A | PTE_D)
 
 #define PAGE_4K_SHIFT 12
 #define PAGE_2M_SHIFT 21
@@ -35,6 +46,15 @@
 #define PAGE_1G_SIZE (1ULL << PAGE_1G_SHIFT)
 
 typedef uint64_t pte_t;
+
+extern char __kernel_text_start[];
+extern char __kernel_text_end[];
+extern char __kernel_rodata_start[];
+extern char __kernel_rodata_end[];
+extern char __kernel_data_start[];
+extern char __kernel_data_end[];
+extern char __kernel_bss_start[];
+extern char __kernel_bss_end[];
 
 /*
  * early_vm 只负责“第一张能让内核继续跑的页表”。
@@ -161,7 +181,7 @@ static int ensure_next_table(pte_t *table, uint64_t index, pte_t **next)
     return 1;
 }
 
-static int map_leaf(uint64_t va, uint64_t pa, uint64_t page_size, int level)
+static int map_leaf(uint64_t va, uint64_t pa, uint64_t page_size, int level, uint64_t flags)
 {
     /*
      * 在指定 level 写入叶子 PTE：
@@ -171,7 +191,7 @@ static int map_leaf(uint64_t va, uint64_t pa, uint64_t page_size, int level)
      * level 0 leaf: 4KB 映射
      *
      * 中间层如果不存在，就通过 ensure_next_table() 创建；最终 level 的 PTE 写入
-     * pa + 权限位，成为真正的地址映射。
+     * pa + 权限位，成为真正的地址映射。flags 不包含 PTE_V，PTE_V 由这里统一补上。
      */
     pte_t *table = kernel_root_table;
 
@@ -191,15 +211,15 @@ static int map_leaf(uint64_t va, uint64_t pa, uint64_t page_size, int level)
     }
 
     /*
-     * 第一版内核页表先用恒等映射把启动流程跑通，权限也先给成 R/W/X。
-     * 后续拆 text/rodata/data、用户态地址空间和设备 MMIO 时，再收紧权限。
+     * 权限在调用点决定：内核 text 映成 R/X，rodata 映成 R，data/bss/栈/普通页映成
+     * R/W。这里不再默认给 X，避免数据页可执行。
      */
-    table[index] = phys_to_pte(pa, PTE_V | PTE_R | PTE_W | PTE_X | PTE_A | PTE_D);
+    table[index] = phys_to_pte(pa, PTE_V | flags);
     mapped_pages += page_size / PAGE_SIZE;
     return 1;
 }
 
-static int identity_map_range(uint64_t start, uint64_t size)
+static int identity_map_range(uint64_t start, uint64_t size, uint64_t flags)
 {
     /*
      * 恒等映射一段物理内存：VA == PA。
@@ -222,7 +242,7 @@ static int identity_map_range(uint64_t start, uint64_t size)
         uint64_t remaining = end - va;
         if (remaining >= PAGE_1G_SIZE && is_aligned(va, PAGE_1G_SIZE))
         {
-            if (!map_leaf(va, va, PAGE_1G_SIZE, 2))
+            if (!map_leaf(va, va, PAGE_1G_SIZE, 2, flags))
             {
                 return 0;
             }
@@ -232,7 +252,7 @@ static int identity_map_range(uint64_t start, uint64_t size)
 
         if (remaining >= PAGE_2M_SIZE && is_aligned(va, PAGE_2M_SIZE))
         {
-            if (!map_leaf(va, va, PAGE_2M_SIZE, 1))
+            if (!map_leaf(va, va, PAGE_2M_SIZE, 1, flags))
             {
                 return 0;
             }
@@ -240,7 +260,7 @@ static int identity_map_range(uint64_t start, uint64_t size)
             continue;
         }
 
-        if (!map_leaf(va, va, PAGE_4K_SIZE, 0))
+        if (!map_leaf(va, va, PAGE_4K_SIZE, 0, flags))
         {
             return 0;
         }
@@ -255,35 +275,68 @@ static int map_boot_info_ranges(const struct kernel_boot_info *boot_info)
     /*
      * 这些范围是打开页表前后都会立刻访问的启动材料，必须先映射：
      *
-     * kernel image      : 当前正在执行的代码和数据
      * kernel stack      : 当前 sp 正在使用的栈
      * boot_info         : 入口参数本身
      * EFI memory map    : memory_state/page allocator 的来源
      * DTB               : 后续设备发现会用到
      */
-    if (!identity_map_range(boot_info->kernel_phys_base, boot_info->kernel_size))
+    if (!identity_map_range(boot_info->kernel_stack_phys, boot_info->kernel_stack_size, PTE_RW))
     {
         return 0;
     }
-    if (!identity_map_range(boot_info->kernel_stack_phys, boot_info->kernel_stack_size))
+    if (!identity_map_range(boot_info->boot_info_phys, boot_info->boot_info_size, PTE_RW))
     {
         return 0;
     }
-    if (!identity_map_range(boot_info->boot_info_phys, boot_info->boot_info_size))
-    {
-        return 0;
-    }
-    if (!identity_map_range(boot_info->efi_memory_map_phys, boot_info->efi_memory_map_size))
+    if (!identity_map_range(boot_info->efi_memory_map_phys, boot_info->efi_memory_map_size, PTE_RONLY))
     {
         return 0;
     }
 
     if ((boot_info->flags & KERNEL_BOOT_HAS_DTB) != 0)
     {
-        if (!identity_map_range(boot_info->dtb_phys, boot_info->dtb_size))
+        if (!identity_map_range(boot_info->dtb_phys, boot_info->dtb_size, PTE_RONLY))
         {
             return 0;
         }
+    }
+
+    return 1;
+}
+
+static int map_kernel_sections(void)
+{
+    /*
+     * 链接脚本把这些 section 边界按 4KB 对齐。同一物理页只能有一条 PTE，因此如果
+     * text 和 rodata/data 混在同一页，就无法可靠地拆权限。
+     */
+    if (!identity_map_range(
+            (uint64_t)(uintptr_t)__kernel_text_start,
+            (uint64_t)(__kernel_text_end - __kernel_text_start),
+            PTE_RX))
+    {
+        return 0;
+    }
+    if (!identity_map_range(
+            (uint64_t)(uintptr_t)__kernel_rodata_start,
+            (uint64_t)(__kernel_rodata_end - __kernel_rodata_start),
+            PTE_RONLY))
+    {
+        return 0;
+    }
+    if (!identity_map_range(
+            (uint64_t)(uintptr_t)__kernel_data_start,
+            (uint64_t)(__kernel_data_end - __kernel_data_start),
+            PTE_RW))
+    {
+        return 0;
+    }
+    if (!identity_map_range(
+            (uint64_t)(uintptr_t)__kernel_bss_start,
+            (uint64_t)(__kernel_bss_end - __kernel_bss_start),
+            PTE_RW))
+    {
+        return 0;
     }
 
     return 1;
@@ -301,7 +354,7 @@ static int map_known_physical_memory(void)
     {
         uint64_t start = memory->usable_ranges[i].start;
         uint64_t size = memory->usable_ranges[i].end - memory->usable_ranges[i].start;
-        if (!identity_map_range(start, size))
+        if (!identity_map_range(start, size, PTE_RW))
         {
             return 0;
         }
@@ -330,6 +383,11 @@ int early_vm_enable(const struct kernel_boot_info *boot_info)
         return 0;
     }
 
+    if (!map_kernel_sections())
+    {
+        early_puts("Kernel section mapping failed\r\n");
+        return 0;
+    }
     if (!map_boot_info_ranges(boot_info))
     {
         early_puts("Kernel boot ranges mapping failed\r\n");
