@@ -1,20 +1,28 @@
 # 第一张 Sv39 页表
 
-内核自己的第一张页表不应该再向 EFI 申请内存。退出 Boot Services 之后，EFI 的
-分配接口已经失效，页表页必须从 RVOS 自己的物理页分配器里拿。
+内核自己的第一张页表不应该再向 EFI 申请内存。退出 Boot Services 后，EFI 分配接口
+已经失效，页表页必须从 RVOS 自己的物理页分配器里拿。
 
-## 恒等映射
-
-当前页表采用 Sv39 恒等映射：
+当前调用链是：
 
 ```text
-virtual address == physical address
+early_vm_enable()
+  -> vm_space_create()：分配根页表。
+  -> vm_identity_map()：映射内核 section、启动材料和可用物理内存。
+     -> vm_map_range()：按范围建立 VA 到 PA 的映射。
+        -> ensure_next_table()：按需分配中间页表页。
+        -> map_leaf()：写入 1GB、2MB 或 4KB 叶子 PTE。
+  -> vm_activate_sv39()：写 satp，启用 Sv39。
 ```
 
-它会覆盖这些范围：
+## early_vm 和 vm
+
+`early_vm` 只负责选择启动后必须立刻可访问的范围。真正页表操作在 `vm.c` 中。
+
+需要映射的范围包括：
 
 ```text
-kernel image
+kernel text / rodata / data / bss
 initial kernel stack
 boot_info
 final EFI memory map
@@ -22,81 +30,95 @@ DTB
 usable physical ranges
 ```
 
+## 恒等映射
+
+当前页表采用恒等映射：
+
+```text
+virtual address == physical address
+```
+
 这样打开 `satp` 后，正在执行的代码、当前栈、启动信息和后续新分配的物理页仍然能
-被早期内核直接访问。
+被内核直接访问。
 
-这个阶段还没有正式的 direct map，也没有区分“物理地址”和“内核虚拟地址”的接口
-边界，所以恒等映射是最直接的过渡方案。
+这个阶段还没有正式 direct map，也没有 `phys_to_virt()` / `virt_to_phys()` 边界。
+恒等映射是从 EFI 交接环境过渡到内核自管页表的最直接方案。
 
-## 权限
+## section 权限
 
-这张页表不是最终地址空间设计，但已经开始拆基本权限：
-
-```text
-kernel text    : R/X
-kernel rodata  : R
-kernel data/bss: R/W
-kernel stack   : R/W
-boot_info      : R/W
-memory map/DTB : R
-usable ranges  : R/W
-```
-
-链接脚本会把关键 section 按 4KB 对齐，因为同一物理页只能有一条 PTE。后面接入
-设备 MMIO、direct map 和用户态地址空间后，还要继续细化映射范围和权限。
-
-PTE 里的 `A` 和 `D` 分别表示“已访问”和“已写入”。它们不是硬件自动清零的 cache
-状态；通常是硬件或 OS 置位，OS 在需要统计访问/写入情况时主动清零。当前还没有
-缺页异常处理，所以早期页表会预先置 `A`，并对可写页预先置 `D`，避免第一次访问或
-写入时因为 A/D 位缺失而进入无法处理的 page fault。
-
-## 页表页数量
-
-日志里的 `page_table_pages` 是页表自身占用的 4KB 页数，不是映射了多少内存。
-
-Sv39 支持 1GB、2MB 和 4KB 三种层级的叶子映射，所以映射很大一段物理内存时不一定
-需要一页一页铺满页表。
-
-根页表没有固定物理地址。内核会从当前物理页分配器里申请一页作为根页表，然后把
-它的物理页号写进 `satp`：
+第一张页表已经拆基本权限：
 
 ```text
-root_table=0x0000000080060000
+kernel text     : R/X
+kernel rodata   : R
+kernel data/bss : R/W
+kernel stack    : R/W
+boot_info       : R/W
+memory map/DTB  : R
+usable ranges   : R/W
 ```
 
-这个地址来自 EFI memory map 里的可用 `ConventionalMemory`。在 QEMU 当前日志里，
-OpenSBI 固件位于 `0x80000000` 附近，EDK2 给出的可用内存从 `0x80060000` 开始；
-kernel ELF 则装载在 `0x80200000`。因此根页表页位于 OpenSBI 之后、kernel 之前，
-不会和二者冲突。后续真实硬件也应以最终 EFI memory map 为准，而不是手写猜测某段
-物理地址是否空闲。
+链接脚本会把关键 section 按 4KB 对齐。原因是同一物理页只能有一条 PTE；如果 text
+和 rodata/data 混在同一页，就无法可靠地拆权限。
 
-页表的中间层不是预先放在固定数组里，而是在建映射时按需申请。`ensure_next_table()`
-的职责是保证“还没到叶子 level 时，下一级页表一定存在”：
+## PTE A/D 位
+
+RISC-V Sv39 PTE 里的 `A` 和 `D` 分别表示 accessed 和 dirty。
+
+它们不是 cache 那样自动清零的状态位。RISC-V 允许两种实现：
+
+- 硬件自动把 A/D 置 1。
+- 硬件在 A/D 缺失时触发 page fault，让 OS 手动补位。
+
+当前还没有 page fault handler，所以创建映射时预先置 `A`，并对可写页预先置 `D`。
+这样第一次取指、读 rodata、写 bss/栈不会因为 A/D 位缺失进入无法处理的异常。
+
+## 页表页按需分配
+
+页表页不是固定数组，也不是启动时一次性预留固定数量。
+
+`vm_space_create()` 只分配一页根页表。后续建立映射时，如果某一级页表不存在，
+`ensure_next_table()` 会调用 `phys_alloc_pages(1)` 按需分配页表页。
+
+因此运行时继续映射 MMIO、vmalloc 或用户页时，只要物理页分配器还能分出页，页表就
+可以继续增长。
+
+## 大页和小页
+
+Sv39 支持不同层级的叶子映射：
 
 ```text
-1GB leaf, level=2:
-  直接在根页表写叶子 PTE，不需要下一级页表
-
-2MB leaf, level=1:
-  确保 root -> level1 table 存在，再在 level1 写叶子 PTE
-
-4KB leaf, level=0:
-  确保 root -> level1 -> level0 table 存在，再在 level0 写叶子 PTE
+level 2 leaf : 1GB
+level 1 leaf : 2MB
+level 0 leaf : 4KB
 ```
 
-所以大页选择发生在 `identity_map_range()`，它根据地址对齐和剩余长度决定传给
-`map_leaf()` 的 level；`ensure_next_table()` 只负责把到达目标 level 之前的页表
-补齐。如果某个区域已经被更细的小页映射占用，代码会拒绝再用大页覆盖它，避免丢失
-已有权限。
+`vm_map_range()` 会优先使用能覆盖当前地址的最大页大小。地址和剩余长度满足 1GB
+对齐时用 1GB leaf；否则尝试 2MB；最后退回 4KB。
 
-## 验证
+`ensure_next_table()` 不决定页大小。它只保证在到达目标 leaf level 前，下一级页表
+存在。
 
-启动日志里出现下面两行，说明内核已经用自己的页分配器准备页表，并成功打开 Sv39：
+当前还不支持把已有大页拆成小页。如果某个区域已经被 1GB/2MB leaf 映射，后续想只改
+其中一个 4KB 页，代码会拒绝。这个能力等用户地址空间和 page fault 接入后再补。
+
+## 启用 satp
+
+根页表没有固定物理地址。内核从页分配器申请一页作为根页表，然后把物理页号写进
+`satp`：
+
+```text
+satp = (SV39_MODE << 60) | (root_phys >> 12)
+```
+
+写 `satp` 前后都会执行 `sfence.vma`，确保旧地址转换缓存不影响新页表。
+
+启动日志里出现：
 
 ```text
 Kernel page table prepared
 Kernel Sv39 enabled
 ```
 
-第二行是在写入 `satp` 之后打印的。如果这行还能输出，说明当前代码、栈、SBI 输出
-路径和必要数据范围都已经被新页表覆盖。
+说明内核已经用自己的物理页分配器准备页表，并成功打开 Sv39。第二行是在写入 `satp`
+之后打印的；如果它还能输出，说明代码、栈和 SBI 输出路径都已经被新页表覆盖。

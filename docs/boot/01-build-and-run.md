@@ -1,138 +1,131 @@
 # 构建与运行
 
-RVOS 早期曾经走裸 `Image` 加 U-Boot 脚本的启动方式。这条路很直接，但它也把很多
-启动细节压回了内核自己身上：内核入口需要假定加载地址、准备 C 运行环境、接收
-设备树、再自己整理启动信息。既然目标板子和 QEMU 都能运行 RISC-V EFI 应用，当前
-仓库只保留 EFI 启动路径。
+这一页记录 RVOS 当前 EFI 启动路径下的构建产物、运行命令和上板方式。快速开始放在
+项目根目录 [README](../../README.md)，这里保留细节。
 
-## 安装依赖
+## 工具链
 
-依赖清单放在 `tools/deps/`，脚本放在 `scripts/`。清单回答“需要装什么”，脚本回答
-“当前发行版怎么装”。
-
-CachyOS/Arch Linux：
+默认编译器是 Clang/LLVM：
 
 ```sh
-./scripts/install-deps-arch.sh
+make toolchain
 ```
 
-Ubuntu/Debian：
-
-```sh
-./scripts/install-deps-ubuntu.sh
-```
-
-默认编译器是 Clang/LLVM。当前 `llvm-objcopy` 不支持 `efi-app-riscv64` 输出格式，
-所以 EFI app 最后一步会使用 GNU binutils 里的 `riscv64-elf-objcopy` 或
-`riscv64-unknown-elf-objcopy` 把 ELF 中间产物转换成 RISC-V EFI PE/COFF 应用。
+EFI app 最后一步仍会使用 GNU objcopy 做 PE/COFF 格式转换。原因是当前
+`llvm-objcopy` 不支持 `efi-app-riscv64` 输出格式。Clang 负责 C 编译和 lld 链接，
+GNU objcopy 只负责把 EFI ELF 中间产物转换成 RISC-V EFI 应用。
 
 ## 默认产物
-
-默认命令：
 
 ```sh
 make
 ```
 
-会生成：
+生成：
 
 ```text
 build/efi/BOOTRISCV64.EFI
 build/kernel/kernel.elf
 ```
 
-前者是 EFI 应用，后者是真正的 RVOS 内核 ELF。需要生成能直接挂载启动的 ESP 镜像：
+`BOOTRISCV64.EFI` 是 UEFI 默认路径下的 RISC-V EFI 应用。`kernel.elf` 是真正长期
+运行的 RVOS 内核。
+
+## ESP 镜像
 
 ```sh
 make efi-esp
 ```
 
-ESP 镜像内会包含：
+生成：
+
+```text
+build/efi/esp.img
+```
+
+镜像内容：
 
 ```text
 EFI/BOOT/BOOTRISCV64.EFI
 RVOS/KERNEL.ELF
 ```
 
+EFI loader 启动后会从同一个启动介质打开 `RVOS/KERNEL.ELF`。
+
+## QEMU
+
+```sh
+make run
+```
+
+`make run` 使用 QEMU virt 机器和 EDK2 固件。当前显式关闭 ACPI：
+
+```text
+-machine virt,acpi=off
+```
+
+这样 EDK2 会把 QEMU 构造的 DTB 注册进 EFI configuration table，行为更接近开发板
+上 U-Boot `bootefi` 传 DTB 的方式。
+
+QEMU 保留 4 个 hart。启动日志里的 boot hart 不一定是 0，内核必须使用
+`boot_info->boot_hart_id`。
+
+退出 QEMU 控制台：
+
+```text
+Ctrl-A，然后 X
+```
+
 ## 上板启动
 
-`BOOTRISCV64.EFI` 应放在 FAT32/ESP 分区的 UEFI 默认启动路径：
+把 EFI 应用放在 FAT32/ESP 分区的 UEFI 默认启动路径：
 
 ```text
 EFI/BOOT/BOOTRISCV64.EFI
 ```
 
-如果在 U-Boot 命令行里手动启动，可以先加载再 `bootefi`：
+同时把内核 ELF 放在：
+
+```text
+RVOS/KERNEL.ELF
+```
+
+U-Boot 手动启动示例：
 
 ```text
 fatload mmc 1:1 0x80200000 /EFI/BOOT/BOOTRISCV64.EFI
 bootefi 0x80200000
 ```
 
-如果需要显式传 DTB，可以把第二个参数传给 `bootefi`。当前 StarFive U-Boot 已经能
-通过 EFI configuration table 提供 DTB，常见命令是：
+如果固件没有自动把 DTB 放进 EFI configuration table，可以显式传 DTB：
 
 ```text
 bootefi 0x80200000 ${fdtcontroladdr}
 ```
 
-## QEMU 启动
+当前 StarFive U-Boot 已经能通过 EFI configuration table 提供 DTB，是否需要第二个
+参数以实际固件行为为准。
 
-QEMU 走 EDK2：
+## 独立目标
 
-```sh
-make run
-```
-
-`make run` 会启动 ESP 镜像，并显式关闭 ACPI：
-
-```text
--machine virt,acpi=off
-```
-
-这样 EDK2 会把 QEMU 构造的 DTB 注册进 EFI configuration table，行为更接近板子上的
-U-Boot `bootefi`。
-
-QEMU 保留 4 个 hart。启动日志里的 boot hart 不一定是 0，内核必须使用 `boot_info`
-里的实际 boot hart id。
-
-## 独立构建内核
-
-独立内核 ELF 可以显式构建：
+只构建 kernel ELF：
 
 ```sh
 make kernel
 ```
 
-## 工具链
-
-默认编译器是 Clang：
+只构建 EFI app：
 
 ```sh
-make toolchain
+make efi
 ```
 
-EFI 构建仍然会用到 GNU objcopy 做 PE/COFF 格式转换。Clang 负责 C 编译和 lld 链接，
-GNU objcopy 只负责把 EFI ELF 中间产物转换成 `efi-app-riscv64`。
-
-## check-undef
-
-裸机环境没有动态链接器，也不会在运行时帮内核补 libc。Clang/GCC 有时会因为某些
-C 写法生成 helper 调用，例如：
-
-```text
-memcpy
-memset
-__udivdi3
-__atomic_*
-```
-
-这些符号如果留在最终 ELF 里，启动后没有地方解析。`make check-undef` 会对当前
-`build/kernel/kernel.elf` 执行 `nm -u`：
+显示 ELF 未定义符号：
 
 ```sh
-make kernel
 make check-undef
 ```
 
-没有输出才表示最终 kernel ELF 没有未定义符号。
+裸机环境没有动态链接器，也不会在运行时补 libc。Clang/GCC 有时会生成 helper 调用，
+例如 `memcpy`、`memset`、`__udivdi3`、`__atomic_*`。`make check-undef` 没有输出，
+才表示最终 kernel ELF 没有未定义符号。

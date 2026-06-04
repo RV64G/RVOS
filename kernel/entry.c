@@ -2,6 +2,7 @@
 #include "boot_memory.h"
 #include "page_alloc.h"
 #include "early_vm.h"
+#include "dtb.h"
 #include "kernel_boot_info.h"
 
 /*
@@ -126,22 +127,16 @@ void kernel_entry(struct kernel_boot_info *boot_info)
     sbi_console_puts("\r\nKernel ELF entered\r\n");
 
     if (!validate_boot_info(boot_info))
-    {
-        early_halt_forever();
-    }
+        goto HALT;
 
     print_boot_info(boot_info);
     if (!memory_probe(boot_info))
-    {
-        early_halt_forever();
-    }
+        goto HALT;
     if (!page_allocator_init())
-    {
-        early_halt_forever();
-    }
+        goto HALT;
     if (!early_vm_enable(boot_info))
-    {
-        early_halt_forever();
-    }
+        goto HALT;
+    dtb_init(boot_info);
+HALT:
     early_halt_forever();
 }

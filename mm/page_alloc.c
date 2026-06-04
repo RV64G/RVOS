@@ -26,7 +26,8 @@
  * - 分配连续多页时是线性扫描 bitmap，性能不是最终方案；
  * - 没有 zone、NUMA、页归属、页表页回收等完整内核能力。
  */
-struct page_allocator_state {
+struct page_allocator_state
+{
     int ready;
 
     /*
@@ -79,7 +80,8 @@ static uint64_t range_pages(const struct phys_range *range)
 static void zero_bytes(void *ptr, uint64_t size)
 {
     uint8_t *bytes = (uint8_t *)ptr;
-    for (uint64_t i = 0; i < size; i++) {
+    for (uint64_t i = 0; i < size; i++)
+    {
         bytes[i] = 0;
     }
 }
@@ -148,23 +150,28 @@ static int find_pfn_span(const struct boot_memory_state *memory)
     uint64_t min_pfn = UINT64_MAX;
     uint64_t max_pfn = 0;
 
-    for (uint64_t i = 0; i < memory->usable_range_count; i++) {
+    for (uint64_t i = 0; i < memory->usable_range_count; i++)
+    {
         const struct phys_range *range = &memory->usable_ranges[i];
-        if (range->start == 0 || range->end <= range->start) {
+        if (range->start == 0 || range->end <= range->start)
+        {
             continue;
         }
 
         uint64_t start_pfn = range->start / PAGE_SIZE;
         uint64_t end_pfn = range->end / PAGE_SIZE;
-        if (start_pfn < min_pfn) {
+        if (start_pfn < min_pfn)
+        {
             min_pfn = start_pfn;
         }
-        if (end_pfn > max_pfn) {
+        if (end_pfn > max_pfn)
+        {
             max_pfn = end_pfn;
         }
     }
 
-    if (min_pfn == UINT64_MAX || max_pfn <= min_pfn) {
+    if (min_pfn == UINT64_MAX || max_pfn <= min_pfn)
+    {
         return 0;
     }
 
@@ -181,18 +188,23 @@ static uint64_t metadata_size_bytes(void)
      * 一些洞。对当前 QEMU/板子规模这比复杂 sparse mem 更合适。
      */
     allocator.bitmap_words = align_up(allocator.page_count, BITS_PER_WORD) / BITS_PER_WORD;
+
+    /*
+     * 这些乘法结果会决定后面实际保留多少元数据空间。先判断乘法是否会超过
+     * uint64_t 上限，避免回绕成一个很小的值，导致 bitmap/refcount 写出预留区。
+     */
+    if (allocator.bitmap_words > UINT64_MAX / sizeof(uint64_t)) {
+        return 0;
+    }
     uint64_t bitmap_bytes = allocator.bitmap_words * sizeof(uint64_t);
+
+    if (allocator.page_count > UINT64_MAX / sizeof(uint16_t)) {
+        return 0;
+    }
     uint64_t refcount_bytes = allocator.page_count * sizeof(uint16_t);
 
-    if (allocator.bitmap_words != 0 &&
-        bitmap_bytes / sizeof(uint64_t) != allocator.bitmap_words) {
-        return 0;
-    }
-    if (allocator.page_count != 0 &&
-        refcount_bytes / sizeof(uint16_t) != allocator.page_count) {
-        return 0;
-    }
-    if (bitmap_bytes + refcount_bytes < bitmap_bytes) {
+    if (bitmap_bytes + refcount_bytes < bitmap_bytes)
+    {
         return 0;
     }
 
@@ -201,8 +213,7 @@ static uint64_t metadata_size_bytes(void)
 
 static int reserve_metadata_storage(
     const struct boot_memory_state *memory,
-    uint64_t metadata_bytes
-)
+    uint64_t metadata_bytes)
 {
     /*
      * 这里还不能调用 phys_alloc_pages()，因为页分配器自己还没初始化完成。
@@ -211,22 +222,22 @@ static int reserve_metadata_storage(
      * reserve_allocated_range() 完成。
      */
     allocator.metadata_pages = pages_for_size(metadata_bytes);
-    uint64_t metadata_size = allocator.metadata_pages * PAGE_SIZE;
-    if (metadata_size / PAGE_SIZE != allocator.metadata_pages) {
+    if (allocator.metadata_pages > UINT64_MAX / PAGE_SIZE) {
         return 0;
     }
+    uint64_t metadata_size = allocator.metadata_pages * PAGE_SIZE;
 
-    for (uint64_t i = 0; i < memory->usable_range_count; i++) {
+    for (uint64_t i = 0; i < memory->usable_range_count; i++)
+    {
         const struct phys_range *range = &memory->usable_ranges[i];
-        if (range_pages(range) < allocator.metadata_pages) {
+        if (range_pages(range) < allocator.metadata_pages)
+        {
             continue;
         }
 
         allocator.metadata_phys = range->start;
         allocator.free_bitmap = (uint64_t *)(uintptr_t)allocator.metadata_phys;
-        allocator.refcounts = (uint16_t *)(uintptr_t)(
-            allocator.metadata_phys + allocator.bitmap_words * sizeof(uint64_t)
-        );
+        allocator.refcounts = (uint16_t *)(uintptr_t)(allocator.metadata_phys + allocator.bitmap_words * sizeof(uint64_t));
         zero_bytes((void *)(uintptr_t)allocator.metadata_phys, metadata_size);
         return 1;
     }
@@ -243,13 +254,16 @@ static void mark_usable_range(const struct phys_range *range)
     uint64_t start_pfn = range->start / PAGE_SIZE;
     uint64_t end_pfn = range->end / PAGE_SIZE;
 
-    for (uint64_t pfn = start_pfn; pfn < end_pfn; pfn++) {
+    for (uint64_t pfn = start_pfn; pfn < end_pfn; pfn++)
+    {
         uint64_t index = pfn_to_index(pfn);
-        if (!index_is_valid(index)) {
+        if (!index_is_valid(index))
+        {
             continue;
         }
 
-        if (!page_is_free(index)) {
+        if (!page_is_free(index))
+        {
             mark_page_free(index);
             allocator.total_usable_pages++;
             allocator.free_pages++;
@@ -263,7 +277,8 @@ static int reserve_page_index(uint64_t index)
      * 把一个当前空闲的页转成已占用。metadata 预留、未来固定保留页都可以走这个
      * helper。这里要求页必须已经在 bitmap 中是 free，避免重复 reserve。
      */
-    if (!index_is_valid(index) || !page_is_free(index)) {
+    if (!index_is_valid(index) || !page_is_free(index))
+    {
         return 0;
     }
 
@@ -277,9 +292,11 @@ static int reserve_allocated_range(uint64_t phys, uint64_t pages)
 {
     uint64_t start_pfn = phys / PAGE_SIZE;
 
-    for (uint64_t i = 0; i < pages; i++) {
+    for (uint64_t i = 0; i < pages; i++)
+    {
         uint64_t index = pfn_to_index(start_pfn + i);
-        if (!reserve_page_index(index)) {
+        if (!reserve_page_index(index))
+        {
             return 0;
         }
     }
@@ -297,18 +314,22 @@ static int find_free_run(uint64_t pages, uint64_t *start_index)
     uint64_t run_start = 0;
     uint64_t run_pages = 0;
 
-    for (uint64_t i = 0; i < allocator.page_count; i++) {
-        if (!page_is_free(i)) {
+    for (uint64_t i = 0; i < allocator.page_count; i++)
+    {
+        if (!page_is_free(i))
+        {
             run_pages = 0;
             continue;
         }
 
-        if (run_pages == 0) {
+        if (run_pages == 0)
+        {
             run_start = i;
         }
         run_pages++;
 
-        if (run_pages == pages) {
+        if (run_pages == pages)
+        {
             *start_index = run_start;
             return 1;
         }
@@ -323,16 +344,20 @@ static int allocated_range_is_valid(uint64_t start_index, uint64_t pages)
      * free 前的基本防线：被释放的每一页都必须在管理范围内、当前不是 free、
      * refcount 非 0。这样能挡住最常见的 double free、释放未分配页、越界释放。
      */
-    if (!index_is_valid(start_index) || pages == 0) {
+    if (!index_is_valid(start_index) || pages == 0)
+    {
         return 0;
     }
-    if (pages > allocator.page_count - start_index) {
+    if (pages > allocator.page_count - start_index)
+    {
         return 0;
     }
 
-    for (uint64_t i = 0; i < pages; i++) {
+    for (uint64_t i = 0; i < pages; i++)
+    {
         uint64_t index = start_index + i;
-        if (page_is_free(index) || allocator.refcounts[index] == 0) {
+        if (page_is_free(index) || allocator.refcounts[index] == 0)
+        {
             return 0;
         }
     }
@@ -365,22 +390,26 @@ int page_allocator_init(void)
      * 5. 再把 metadata 自己占用的页标回已占用。
      */
     const struct boot_memory_state *memory = memory_state();
-    if (!find_pfn_span(memory)) {
+    if (!find_pfn_span(memory))
+    {
         early_puts("Page allocator rejected empty memory ranges\r\n");
         return 0;
     }
 
     uint64_t metadata_bytes = metadata_size_bytes();
-    if (metadata_bytes == 0 || !reserve_metadata_storage(memory, metadata_bytes)) {
+    if (metadata_bytes == 0 || !reserve_metadata_storage(memory, metadata_bytes))
+    {
         early_puts("Page allocator metadata allocation failed\r\n");
         return 0;
     }
 
-    for (uint64_t i = 0; i < memory->usable_range_count; i++) {
+    for (uint64_t i = 0; i < memory->usable_range_count; i++)
+    {
         mark_usable_range(&memory->usable_ranges[i]);
     }
 
-    if (!reserve_allocated_range(allocator.metadata_phys, allocator.metadata_pages)) {
+    if (!reserve_allocated_range(allocator.metadata_phys, allocator.metadata_pages))
+    {
         early_puts("Page allocator metadata reservation failed\r\n");
         return 0;
     }
@@ -402,19 +431,23 @@ uint64_t page_available_pages(void)
 
 void *phys_alloc_pages(uint64_t pages)
 {
-    if (!allocator.ready || pages == 0) {
+    if (!allocator.ready || pages == 0)
+    {
         return 0;
     }
-    if (pages > allocator.free_pages) {
+    if (pages > allocator.free_pages)
+    {
         return 0;
     }
 
     uint64_t start_index = 0;
-    if (!find_free_run(pages, &start_index)) {
+    if (!find_free_run(pages, &start_index))
+    {
         return 0;
     }
 
-    for (uint64_t i = 0; i < pages; i++) {
+    for (uint64_t i = 0; i < pages; i++)
+    {
         uint64_t index = start_index + i;
         mark_page_used(index);
         allocator.refcounts[index] = 1;
@@ -427,29 +460,34 @@ void *phys_alloc_pages(uint64_t pages)
 
 void phys_free_pages(void *addr, uint64_t pages)
 {
-    if (!allocator.ready || !addr || pages == 0) {
+    if (!allocator.ready || !addr || pages == 0)
+    {
         return;
     }
 
     uint64_t start = (uint64_t)(uintptr_t)addr;
-    if ((start % PAGE_SIZE) != 0) {
+    if ((start % PAGE_SIZE) != 0)
+    {
         early_puts("Page allocator ignored unaligned free\r\n");
         return;
     }
 
     uint64_t start_pfn = start / PAGE_SIZE;
-    if (start_pfn < allocator.base_pfn) {
+    if (start_pfn < allocator.base_pfn)
+    {
         early_puts("Page allocator ignored out-of-range free\r\n");
         return;
     }
 
     uint64_t start_index = pfn_to_index(start_pfn);
-    if (!allocated_range_is_valid(start_index, pages)) {
+    if (!allocated_range_is_valid(start_index, pages))
+    {
         early_puts("Page allocator ignored invalid free\r\n");
         return;
     }
 
-    for (uint64_t i = 0; i < pages; i++) {
+    for (uint64_t i = 0; i < pages; i++)
+    {
         uint64_t index = start_index + i;
         allocator.refcounts[index] = 0;
         mark_page_free(index);
