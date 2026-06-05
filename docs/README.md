@@ -45,12 +45,35 @@
 不要把路线图、模块总览、长调用链、验收说明写进源码注释里；这些内容放到
 `docs/`。
 
-设计文档建议固定包含：
+启动链文档按函数调用流程写。函数名后面只用一句话说明“做什么”，具体“怎么做”
+放在正文或源码注释里：
 
-1. 目标
-2. 背景知识
-3. 关键数据结构
-4. 控制流程
-5. 需要完成的工作
-6. 验证方式
-7. 注意事项
+```text
+efi_main()
+  -> efi_collect_boot_info()：收集 DTB、boot hart id 和 memory map。
+     -> find_dtb()：从 EFI configuration table 找 DTB。
+  -> efi_load_kernel_elf()：打开并装载 kernel ELF。
+```
+
+写调用链时只列关键函数：
+
+- 启动主线函数必须列。
+- 解释关键机制的二级函数可以列。
+- 涉及 ABI、硬件格式、页表结构、内存所有权的三级函数可以列。
+- 纯 helper 不列，例如 `align_up()`、普通字符串比较和简单打印函数。
+
+源码注释优先使用 Doxygen 风格写在头文件接口上，方便编辑器悬停提示：
+
+```c
+/**
+ * 分配连续物理页。
+ *
+ * @param pages 需要分配的 4KB 页数量，必须大于 0。
+ * @return 成功时返回物理地址；失败时返回 0。
+ */
+void *phys_alloc_pages(uint64_t pages);
+```
+
+实现文件里的大块注释只解释第一眼看不出的约束，例如 `ExitBootServices()` 前为什么
+必须重新读取 memory map、PTE 的 A/D 位为什么预置、页分配器 metadata 为什么要从
+usable memory 里切出来。

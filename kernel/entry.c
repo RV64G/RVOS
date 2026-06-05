@@ -6,6 +6,7 @@
 #include "kernel_boot_info.h"
 #include "platform.h"
 #include "printk.h"
+#include "trap.h"
 
 /*
  * boot_info->flags 是一个 bitset。loader 只有在某类启动信息有效时才会置位，
@@ -141,6 +142,7 @@ void kernel_entry(struct kernel_boot_info *boot_info)
     if (!platform_map_mmio())
         goto HALT;
     printk_init();
+    trap_init();
 HALT:
     early_halt_forever();
 }

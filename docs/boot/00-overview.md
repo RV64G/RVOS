@@ -41,3 +41,4 @@ kernel ELF 负责长期运行
 - [06 第一张 Sv39 页表](06-first-page-table.md)
 - [07 内存接口](07-memory-interfaces.md)
 - [08 平台 MMIO 与 UART 输出](08-platform-init.md)
+- [09 Trap 入口与返回](09-trap-entry.md)
