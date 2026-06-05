@@ -20,7 +20,8 @@
 - [04 Kernel Entry](boot/04-kernel-entry.md)
 - [05 Memory Map 与物理页分配](boot/05-memory-map-and-pages.md)
 - [06 第一张 Sv39 页表](boot/06-first-page-table.md)
-- [07 启动链后续工作](boot/07-next-steps.md)
+- [07 内存接口](boot/07-memory-interfaces.md)
+- [08 平台 MMIO 与 UART 输出](boot/08-platform-init.md)
 
 ## 后续专题
 

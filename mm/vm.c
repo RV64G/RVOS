@@ -428,7 +428,12 @@ void vm_activate_sv39(const struct vm_space *space)
      * 写 satp 前后都执行 sfence.vma。前一次清掉旧地址转换缓存影响，后一次让新页表
      * 对后续取指和访存立即生效。
      */
-    __asm__ volatile("sfence.vma zero, zero" ::: "memory");
+    vm_flush_all();
     __asm__ volatile("csrw satp, %0" ::"r"(satp) : "memory");
+    vm_flush_all();
+}
+
+void vm_flush_all(void)
+{
     __asm__ volatile("sfence.vma zero, zero" ::: "memory");
 }

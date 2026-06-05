@@ -65,4 +65,12 @@ int vm_unmap_range(struct vm_space *space, uint64_t va, uint64_t size);
  */
 void vm_activate_sv39(const struct vm_space *space);
 
+/**
+ * 刷新当前 hart 的全部地址转换缓存。
+ *
+ * 启用 MMU 后如果继续修改当前正在使用的页表，需要在修改后执行一次刷新，让新的
+ * PTE 对后续访存可见。
+ */
+void vm_flush_all(void);
+
 #endif

@@ -17,5 +17,6 @@ void platform_info_reset(uint64_t boot_hart_id);
 const struct platform_info *platform_info(void);
 struct platform_info *platform_info_mut(void);
 void platform_info_print(void);
+int platform_map_mmio(void);
 
 #endif

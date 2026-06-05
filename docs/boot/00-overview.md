@@ -40,3 +40,4 @@ kernel ELF 负责长期运行
 - [05 Memory Map 与物理页分配](05-memory-map-and-pages.md)
 - [06 第一张 Sv39 页表](06-first-page-table.md)
 - [07 内存接口](07-memory-interfaces.md)
+- [08 平台 MMIO 与 UART 输出](08-platform-init.md)

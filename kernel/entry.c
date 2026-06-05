@@ -4,6 +4,8 @@
 #include "early_vm.h"
 #include "dtb.h"
 #include "kernel_boot_info.h"
+#include "platform.h"
+#include "printk.h"
 
 /*
  * boot_info->flags 是一个 bitset。loader 只有在某类启动信息有效时才会置位，
@@ -118,9 +120,8 @@ static int validate_boot_info(const struct kernel_boot_info *boot_info)
 /*
  * EFI loader 跳进来的第一个内核入口。
  *
- * 当前阶段还没有串口驱动、页分配器和 printk，所以这里直接通过 SBI debug console
- * 打印最早期日志。等内核接管设备和内存后，这些临时打印函数应该退到正式 printk
- * 后面，入口也会继续拆出 arch 级初始化和通用内核初始化。
+ * EFI loader 跳进来时还没有解析 DTB，也不知道 UART 在哪里，所以最早期日志仍走
+ * SBI debug console。DTB 解析完成后，printk_init() 会把正式内核日志切到 UART。
  */
 void kernel_entry(struct kernel_boot_info *boot_info)
 {
@@ -137,6 +138,9 @@ void kernel_entry(struct kernel_boot_info *boot_info)
     if (!early_vm_enable(boot_info))
         goto HALT;
     dtb_init(boot_info);
+    if (!platform_map_mmio())
+        goto HALT;
+    printk_init();
 HALT:
     early_halt_forever();
 }
