@@ -1,6 +1,7 @@
 #include "early_log.h"
 #include "boot_memory.h"
 #include "page_alloc.h"
+#include "kmalloc.h"
 #include "early_vm.h"
 #include "dtb.h"
 #include "kernel_boot_info.h"
@@ -138,6 +139,7 @@ void kernel_entry(struct kernel_boot_info *boot_info)
         goto HALT;
     if (!early_vm_enable(boot_info))
         goto HALT;
+    kmalloc_init();
     dtb_init(boot_info);
     if (!platform_map_mmio())
         goto HALT;
