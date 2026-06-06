@@ -42,3 +42,4 @@ kernel ELF 负责长期运行
 - [07 内存接口](07-memory-interfaces.md)
 - [08 平台 MMIO 与 UART 输出](08-platform-init.md)
 - [09 Trap 入口与返回](09-trap-entry.md)
+- [10 SBI Timer 与系统 Tick](10-sbi-timer.md)

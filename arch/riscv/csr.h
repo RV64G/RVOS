@@ -10,6 +10,16 @@ static inline uint64_t csr_read_sstatus(void)
     return value;
 }
 
+static inline void csr_set_sstatus(uint64_t mask)
+{
+    __asm__ volatile ("csrs sstatus, %0" : : "r"(mask) : "memory");
+}
+
+static inline void csr_set_sie(uint64_t mask)
+{
+    __asm__ volatile ("csrs sie, %0" : : "r"(mask) : "memory");
+}
+
 static inline uint64_t csr_read_scause(void)
 {
     uint64_t value;

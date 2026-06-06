@@ -3,6 +3,7 @@
 #include "csr.h"
 #include "early_log.h"
 #include "printk.h"
+#include "timer.h"
 
 #define SCAUSE_INTERRUPT (1ULL << 63)
 #define SCAUSE_CODE_MASK (~SCAUSE_INTERRUPT)
@@ -56,7 +57,7 @@ static void handle_interrupt(struct trap_frame *frame, uint64_t code)
         trap_stop("Supervisor software interrupt", frame);
         return;
     case SCAUSE_SUPERVISOR_TIMER_INTERRUPT:
-        trap_stop("Supervisor timer interrupt", frame);
+        timer_handle_interrupt();
         return;
     case SCAUSE_SUPERVISOR_EXTERNAL_INTERRUPT:
         trap_stop("Supervisor external interrupt", frame);
