@@ -16,6 +16,12 @@
             }
         },
         {
+            "label": "Generate Compile Commands",
+            "type": "shell",
+            "command": "make compile-commands",
+            "problemMatcher": []
+        },
+        {
             "label": "Build ESP",
             "type": "shell",
             "command": "make efi-esp"

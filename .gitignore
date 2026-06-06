@@ -57,6 +57,7 @@ os.txt
 build/
 
 # Build-generated files
+compile_commands.json
 include/kernel/syscall_numbers.h
 include/kernel/user_syscalls.h
 include/kernel/do_functions.h

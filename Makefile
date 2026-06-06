@@ -55,6 +55,18 @@ toolchain:
 check-undef: $(KERNEL_ELF)
 	@$(NM) -u $(KERNEL_ELF)
 
+# Generate clangd/IDE compile database.
+compile-commands:
+	@python3 scripts/gen-compile-commands.py \
+		--output compile_commands.json \
+		--directory "$(CURDIR)" \
+		--cc "$(CC)" \
+		--kernel-cflags '$(KERNEL_ELF_CFLAGS)' \
+		--kernel-sources '$(KERNEL_ELF_C_SRCS)' \
+		--efi-cflags '$(EFI_CFLAGS)' \
+		--efi-sources '$(EFI_APP_SRCS) $(EFI_RISCV_SRCS)'
+	@echo "Generated compile_commands.json"
+
 # Show ELF section sizes
 size: $(KERNEL_ELF)
 	@$(SIZE) $(KERNEL_ELF)
@@ -77,4 +89,4 @@ wall:
 	@($(MAKE) -k all CFLAGS_WARN="$(CFLAGS_WARN_STRICT)" > wall_warnings.log 2>&1) || true
 	@echo "Strict compilation finished. Check wall_warnings.log for details."
 
-.PHONY: all clean run wall code txt toolchain check-undef size
+.PHONY: all clean run wall code txt toolchain check-undef compile-commands size

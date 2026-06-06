@@ -4,6 +4,9 @@
         80,
         100
     ],
+    "editor.insertSpaces": true,
+    "editor.tabSize": 4,
+    "editor.detectIndentation": false,
     "files.trimTrailingWhitespace": true,
     "files.associations": {
         "*.S": "riscv",
@@ -13,6 +16,15 @@
         "kernel.h": "c",
         "printk.h": "c",
         "test.h": "c"
+    },
+    "C_Cpp.intelliSenseEngine": "disabled",
+    "clangd.arguments": [
+        "--compile-commands-dir=${workspaceFolder}",
+        "--background-index"
+    ],
+    "[c]": {
+        "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd",
+        "editor.tabSize": 4
     },
     
     // 搜索和文件浏览器排除
