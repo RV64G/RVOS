@@ -41,6 +41,8 @@ struct fdt_node_state {
     uint32_t parent_size_cells;
     uint64_t reg_addr;
     uint64_t reg_size;
+    uint32_t uart_reg_shift;
+    uint32_t uart_reg_io_width;
     int has_reg;
     int is_uart;
     int is_interrupt_controller;
@@ -140,6 +142,8 @@ static void save_reg_if_needed(const struct fdt_node_state *node)
     if (node->is_uart && platform->uart_base == 0) {
         platform->uart_base = node->reg_addr;
         platform->uart_size = node->reg_size;
+        platform->uart_reg_shift = node->uart_reg_shift;
+        platform->uart_reg_io_width = node->uart_reg_io_width;
     }
 
     if (node->is_interrupt_controller && platform->irq_base == 0) {
@@ -210,6 +214,25 @@ static void parse_property(
 
     if (str_eq(prop_name, "timebase-frequency") && len >= sizeof(uint32_t)) {
         platform->timebase_frequency = be32_read(value);
+        return;
+    }
+
+    /*
+     * ns16550 兼容 UART 的寄存器编号是 THR=0、LSR=5，但某些 SoC 会把寄存器按
+     * 32-bit 间隔摆放。DTB 用 reg-shift 表示“寄存器编号左移几位后才是字节偏移”：
+     * reg-shift=2 时，LSR 实际在 base + (5 << 2)。
+     */
+    if (str_eq(prop_name, "reg-shift") && len >= sizeof(uint32_t)) {
+        node->uart_reg_shift = be32_read(value);
+        return;
+    }
+
+    /*
+     * reg-io-width 表示访问寄存器时应使用的总线宽度。没有这个属性时按传统 8-bit
+     * ns16550 处理；StarFive 一类平台常见的是 reg-shift=2、reg-io-width=4。
+     */
+    if (str_eq(prop_name, "reg-io-width") && len >= sizeof(uint32_t)) {
+        node->uart_reg_io_width = be32_read(value);
         return;
     }
 
@@ -284,6 +307,8 @@ static int parse_structure_block(
             stack[depth].parent_size_cells = inherited_size_cells;
             stack[depth].reg_addr = 0;
             stack[depth].reg_size = 0;
+            stack[depth].uart_reg_shift = 0;
+            stack[depth].uart_reg_io_width = 1;
             stack[depth].has_reg = 0;
             stack[depth].is_uart = 0;
             stack[depth].is_interrupt_controller = 0;

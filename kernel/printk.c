@@ -19,7 +19,9 @@ void printk_init(void)
     const struct platform_info *platform = platform_info();
 
     if (platform->uart_base != 0) {
-        if (uart_console_init(platform->uart_base, platform->uart_size)) {
+        if (uart_console_init(platform->uart_base, platform->uart_size,
+                              platform->uart_reg_shift,
+                              platform->uart_reg_io_width)) {
             printk("UART console ready\r\n");
         }
     }

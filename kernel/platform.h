@@ -9,6 +9,8 @@ struct platform_info {
     uint64_t timebase_frequency;
     uint64_t uart_base;
     uint64_t uart_size;
+    uint32_t uart_reg_shift;
+    uint32_t uart_reg_io_width;
     uint64_t irq_base;
     uint64_t irq_size;
 };
