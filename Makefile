@@ -11,6 +11,9 @@ include mk/qemu.mk
 
 # --- Build Paths ---
 BUILD_DIR  = build
+TFTP_ROOT ?= /tmp/rvos-tftp
+TFTP_IFACE ?= enp55s0
+TFTP_HOST ?= 10.90.50.43
 
 include mk/kernel.mk
 include mk/efi.mk
@@ -67,6 +70,13 @@ compile-commands:
 		--efi-sources '$(EFI_APP_SRCS) $(EFI_RISCV_SRCS)'
 	@echo "Generated compile_commands.json"
 
+tftp-sync:
+	@TFTP_ROOT="$(TFTP_ROOT)" scripts/board-tftp-sync.sh
+
+tftp-serve:
+	@TFTP_ROOT="$(TFTP_ROOT)" TFTP_IFACE="$(TFTP_IFACE)" TFTP_HOST="$(TFTP_HOST)" \
+		scripts/board-tftp-serve.sh
+
 # Show ELF section sizes
 size: $(KERNEL_ELF)
 	@$(SIZE) $(KERNEL_ELF)
@@ -89,4 +99,4 @@ wall:
 	@($(MAKE) -k all CFLAGS_WARN="$(CFLAGS_WARN_STRICT)" > wall_warnings.log 2>&1) || true
 	@echo "Strict compilation finished. Check wall_warnings.log for details."
 
-.PHONY: all clean run wall code txt toolchain check-undef compile-commands size
+.PHONY: all clean run wall code txt toolchain check-undef compile-commands tftp-sync tftp-serve size

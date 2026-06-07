@@ -106,6 +106,92 @@ bootefi 0x80200000 ${fdtcontroladdr}
 当前 StarFive U-Boot 已经能通过 EFI configuration table 提供 DTB，是否需要第二个
 参数以实际固件行为为准。
 
+## TFTP 更新开发板文件
+
+频繁上板调试时，不需要反复插拔 SD 卡。主机用 TFTP 暴露最新构建产物，U-Boot 从
+网口下载文件，再写回 SD 卡的 FAT 分区。
+
+主机侧先生成并刷新 TFTP 目录：
+
+```sh
+make tftp-sync
+```
+
+默认会写入：
+
+```text
+/tmp/rvos-tftp/BOOTRISCV64.EFI
+/tmp/rvos-tftp/KERNEL.ELF
+```
+
+然后启动临时 TFTP 服务：
+
+```sh
+make tftp-serve
+```
+
+默认参数按当前调试机器设置：
+
+```text
+TFTP_IFACE=enp55s0
+TFTP_HOST=10.90.50.43
+TFTP_ROOT=/tmp/rvos-tftp
+```
+
+如果网卡或地址不同，可以覆盖：
+
+```sh
+make tftp-serve TFTP_IFACE=enp55s0 TFTP_HOST=10.90.50.43
+```
+
+U-Boot 侧先配置网络：
+
+```text
+setenv serverip 10.90.50.43
+setenv ipaddr 10.90.50.44
+setenv netmask 255.255.255.0
+ping ${serverip}
+```
+
+确认 `ping` 成功后，下载并覆盖 SD 卡中的 EFI app 和 kernel ELF：
+
+```text
+tftpboot 0x88000000 BOOTRISCV64.EFI
+fatrm mmc 1:1 /EFI/BOOT/BOOTRISCV64.EFI
+fatwrite mmc 1:1 0x88000000 /EFI/BOOT/BOOTRISCV64.EFI ${filesize}
+
+tftpboot 0x88000000 KERNEL.ELF
+fatrm mmc 1:1 /RVOS/KERNEL.ELF
+fatwrite mmc 1:1 0x88000000 /RVOS/KERNEL.ELF ${filesize}
+```
+
+最后按原路径启动：
+
+```text
+fatload mmc 1:1 0x80200000 /EFI/BOOT/BOOTRISCV64.EFI
+bootefi 0x80200000 ${fdtcontroladdr}
+```
+
+可以把上面这段固化成 U-Boot 环境变量，之后只执行一个命令：
+
+```text
+setenv rvos_update_boot 'tftpboot 0x88000000 BOOTRISCV64.EFI; fatrm mmc 1:1 /EFI/BOOT/BOOTRISCV64.EFI; fatwrite mmc 1:1 0x88000000 /EFI/BOOT/BOOTRISCV64.EFI ${filesize}; tftpboot 0x88000000 KERNEL.ELF; fatrm mmc 1:1 /RVOS/KERNEL.ELF; fatwrite mmc 1:1 0x88000000 /RVOS/KERNEL.ELF ${filesize}; fatload mmc 1:1 0x80200000 /EFI/BOOT/BOOTRISCV64.EFI; bootefi 0x80200000 ${fdtcontroladdr}'
+saveenv
+```
+
+以后主机侧运行 `make tftp-sync`，板子侧运行：
+
+```text
+run rvos_update_boot
+```
+
+## 显示输出实验结论
+
+当前上板调试验证过 U-Boot 的 `lcdputs` 和 UEFI GOP framebuffer 在
+`ExitBootServices()` 前可以显示内容。但退出 Boot Services 后，显示器会进入节能
+状态，说明固件没有继续保证显示控制器链路可用。因此当前启动主线不把 GOP
+framebuffer 作为内核输出接口，内核日志仍以 UART/printk 为准。
+
 ## 独立目标
 
 只构建 kernel ELF：
