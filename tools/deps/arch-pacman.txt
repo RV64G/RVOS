@@ -1,0 +1,24 @@
+# CachyOS / Arch Linux packages for RVOS development.
+# Install with scripts/install-deps-arch.sh.
+
+base-devel
+git
+curl
+
+# RISC-V bare-metal GCC toolchain.
+riscv64-elf-binutils
+riscv64-elf-gcc
+riscv64-elf-gdb
+
+# QEMU RISC-V machine emulator and firmware.
+qemu-system-riscv
+qemu-system-riscv-firmware
+
+# FAT/ESP image creation for make efi-esp.
+dosfstools
+mtools
+
+# LLVM/Clang toolchain.
+clang
+llvm
+lld

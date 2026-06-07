@@ -15,22 +15,23 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Install RISC-V toolchain and QEMU
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          gcc-riscv64-unknown-elf \
-          qemu-system-misc \
-          gdb-multiarch \
-          u-boot-tools \
-          build-essential
+    - name: Install host dependencies
+      run: ./scripts/install-deps-ubuntu.sh
 
-    - name: Build OS kernel (C only)
+    - name: Build default EFI application
       run: make all
 
-    - name: Upload build artifacts
+    - name: Check kernel undefined symbols
+      run: make check-undef
+
+    - name: Build EFI system partition image
+      run: make efi-esp
+
+    - name: Upload EFI artifact
       uses: actions/upload-artifact@v4
       with:
-        name: rvos-build
+        name: rvos-efi-artifacts
         path: |
-          Image
+          build/efi/BOOTRISCV64.EFI
+          build/kernel/kernel.elf
+        if-no-files-found: error

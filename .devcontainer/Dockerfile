@@ -4,17 +4,11 @@ FROM ubuntu:22.04
 # Avoid interactive prompts during package installation.
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install all necessary system dependencies in a single layer to optimize image size.
-# This includes the C toolchain, GDB for RISC-V, QEMU, and the RISC-V C cross-compiler.
+COPY tools/deps/ubuntu-apt.txt /tmp/rvos-ubuntu-apt.txt
+
+# Install host dependencies from the shared Ubuntu package manifest.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    gdb-multiarch \
-    qemu-system-misc \
-    gcc-riscv64-unknown-elf \
-    curl \
-    git \
-    u-boot-tools \
-    sudo \
+    $(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' /tmp/rvos-ubuntu-apt.txt) \
     && rm -rf /var/lib/apt/lists/*
 
 # Create a non-root user 'vscode' to enhance security and avoid permission issues.

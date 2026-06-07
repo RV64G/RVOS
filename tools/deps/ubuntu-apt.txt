@@ -1,0 +1,23 @@
+# Ubuntu/Debian packages for RVOS development.
+# Install with scripts/install-deps-ubuntu.sh.
+
+build-essential
+git
+curl
+sudo
+
+# RISC-V bare-metal GCC toolchain.
+gcc-riscv64-unknown-elf
+
+# Debugging and QEMU.
+gdb-multiarch
+qemu-system-misc
+
+# FAT/ESP image creation for make efi-esp.
+dosfstools
+mtools
+
+# LLVM/Clang toolchain.
+clang
+llvm
+lld

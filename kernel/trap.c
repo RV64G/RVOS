@@ -1,126 +1,127 @@
-#include "kernel.h"
-#include "arch/sbi.h"
-#include "kernel/sched.h"  // 包含调度器头文件，获取extern声明
+#include "trap.h"
+
+#include "csr.h"
+#include "early_log.h"
+#include "printk.h"
+#include "timer.h"
+
+#define SCAUSE_INTERRUPT (1ULL << 63)
+#define SCAUSE_CODE_MASK (~SCAUSE_INTERRUPT)
+
+#define SCAUSE_SUPERVISOR_SOFTWARE_INTERRUPT 1ULL
+#define SCAUSE_SUPERVISOR_TIMER_INTERRUPT    5ULL
+#define SCAUSE_SUPERVISOR_EXTERNAL_INTERRUPT 9ULL
+
+#define SCAUSE_ILLEGAL_INSTRUCTION 2ULL
+#define SCAUSE_BREAKPOINT          3ULL
+#define SCAUSE_LOAD_ACCESS_FAULT   5ULL
+#define SCAUSE_STORE_ACCESS_FAULT  7ULL
+#define SCAUSE_USER_ECALL          8ULL
+#define SCAUSE_SUPERVISOR_ECALL    9ULL
+#define SCAUSE_INST_PAGE_FAULT     12ULL
+#define SCAUSE_LOAD_PAGE_FAULT     13ULL
+#define SCAUSE_STORE_PAGE_FAULT    15ULL
 
 extern void trap_vector(void);
-extern void uart_isr(void);
-extern void timer_handler(void);
-extern void schedule(void);
-extern void do_syscall(struct context *ctx);
 
-extern int current_ctx;
-struct context context_inited = {0};
-
-void trap_init()
-{	/*
-	 * set the trap-vector base-address for supervisor-mode
-	 */
-	asm volatile("csrw stvec, %0" : : "r" ((reg_t)trap_vector));
-	asm volatile("csrw sscratch, %0" : : "r" ((reg_t)&context_inited));
+static void print_trap_frame(const char *title, const struct trap_frame *frame)
+{
+    printk(title);
+    printk("\r\n");
+    printk_field("sepc", frame->sepc);
+    printk_field("sstatus", frame->sstatus);
+    printk_field("scause", frame->scause);
+    printk_field("stval", frame->stval);
 }
 
-// void external_interrupt_handler()
-// {
-// 	int irq = plic_claim();
+static void trap_stop(const char *reason, const struct trap_frame *frame)
+{
+    print_trap_frame(reason, frame);
+    early_halt_forever();
+}
 
-// 	if (irq == UART0_IRQ)
-// 	{
-// 		uart_isr();
-// 	}
-// 	else if (irq)
-// 	{
-// 		printk("unexpected interrupt irq = %d\n", irq);
-// 	}
+void trap_init(void)
+{
+    /*
+     * stvec 的低两位是模式位。这里传入自然对齐的函数地址，低两位为 0，
+     * 表示 Direct 模式：所有异常和中断先进入同一个 trap_vector。
+     */
+    csr_write_stvec((uint64_t)trap_vector);
+    printk("Trap vector installed\r\n");
+}
 
-// 	if (irq)
-// 	{
-// 		plic_complete(irq);
-// 	}
-// }
+static void handle_interrupt(struct trap_frame *frame, uint64_t code)
+{
+    switch (code) {
+    case SCAUSE_SUPERVISOR_SOFTWARE_INTERRUPT:
+        trap_stop("Supervisor software interrupt", frame);
+        return;
+    case SCAUSE_SUPERVISOR_TIMER_INTERRUPT:
+        timer_handle_interrupt();
+        return;
+    case SCAUSE_SUPERVISOR_EXTERNAL_INTERRUPT:
+        trap_stop("Supervisor external interrupt", frame);
+        return;
+    default:
+        printk_field("interrupt_code", code);
+        trap_stop("Unknown interrupt", frame);
+        return;
+    }
+}
 
-/**
- * @brief 内核的中心陷阱处理器
- * @details
- *   当任何异常、中断或系统调用发生时，CPU硬件会强制跳转到 `arch/riscv/entry.S` 中的 `trap_vector`。
- *   `trap_vector` 保存当前上下文后，会调用此函数进行处理。
- *   此函数通过分析 `cause` 寄存器来区分陷阱类型，并分发给相应的处理函数。
- * 
- * @param epc 发生陷阱时CPU的程序计数器 (PC)
- * @param cause 描述陷阱原因的控制寄存器
- * @param ctx 指向被中断任务的上下文保存区域的指针
- * @return 返回给 `trap_vector` 的PC值，通常是 `epc` 或 `epc + 4`
- */
-reg_t trap_handler(reg_t epc, reg_t cause, struct context *ctx)
-{	reg_t return_pc = epc;
-	reg_t cause_code = cause & 0xfff;
-	//printk("trap_handler\n");
-	if (cause & 0x8000000000000000ULL) // 64-bit interrupt flag
-	{
-		// 异步陷阱：中断处理
-		switch (cause_code)
-		{
-		case 1: // Supervisor software interrupt
-		{
-			/* In S-mode, clear the software interrupt via SBI */
-			sbi_clear_ipi();
-			schedule();
-			break;
-		}
-		case 5: // Supervisor timer interrupt
-			timer_handler();
-			break;
-		case 9: // Supervisor external interrupt
-			//external_interrupt_handler();
-			break;
-		default:
-			printk("未知的异步异常！\n");
-			break;
-		}
-	}
-	else
-	{
-		// 同步异常
-		switch (cause_code)
-		{
-		case 2:
-			printk("Illegal instruction!\n");
-			printk("PC: 0x%lx, Cause: 0x%lx\n", epc, cause);
-			printk("Current task ID: %d\n", current_task_id);
-			if (current_task_id >= 0) {
-				printk("Task state: %d\n", tasks[current_task_id].state);
-			}
-			while (1);
-			break;
-		case 5:
-			printk("Fault load!\n");
-			while(1);
-			break;
-		case 7:
-			printk("Fault store!\n");
-			while(1);
-			break;
-		case 8:
-			///printk("Environment call from U-mode!\n");
-			ctx->pc = epc + 4;
-			do_syscall(ctx);
-			return_pc = ctx->pc;
-			break;
-		case 11:
-			//printk("Environment call from M-mode!\n");
-			ctx->pc = epc + 4;
-			do_syscall(ctx);
-			return_pc = ctx->pc;
-			break;
-		default:
-			/* Synchronous trap - exception */
-			printk("Sync exceptions! cause code: %d\n", cause_code);
-			while (1)
-			{
-				;
-			}
-			
-			break;
-		}
-	}
-	return return_pc;
+static void handle_exception(struct trap_frame *frame, uint64_t code)
+{
+    if (code == SCAUSE_BREAKPOINT) {
+        /*
+         * 当前只把 32-bit ebreak 当作调试断点处理，所以这里把 sepc 前进 4 字节。
+         * 如果以后允许压缩指令触发 c.ebreak，需要根据指令长度决定前进 2 还是 4。
+         */
+        print_trap_frame("Breakpoint exception", frame);
+        frame->sepc += 4;
+        printk("Breakpoint trap returned\r\n");
+        return;
+    }
+
+    switch (code) {
+    case SCAUSE_ILLEGAL_INSTRUCTION:
+        trap_stop("Illegal instruction exception", frame);
+        return;
+    case SCAUSE_LOAD_ACCESS_FAULT:
+        trap_stop("Load access fault", frame);
+        return;
+    case SCAUSE_STORE_ACCESS_FAULT:
+        trap_stop("Store access fault", frame);
+        return;
+    case SCAUSE_USER_ECALL:
+        trap_stop("User ecall reached before syscall init", frame);
+        return;
+    case SCAUSE_SUPERVISOR_ECALL:
+        trap_stop("Supervisor ecall reached before syscall init", frame);
+        return;
+    case SCAUSE_INST_PAGE_FAULT:
+        trap_stop("Instruction page fault", frame);
+        return;
+    case SCAUSE_LOAD_PAGE_FAULT:
+        trap_stop("Load page fault", frame);
+        return;
+    case SCAUSE_STORE_PAGE_FAULT:
+        trap_stop("Store page fault", frame);
+        return;
+    default:
+        printk_field("exception_code", code);
+        trap_stop("Unknown exception", frame);
+        return;
+    }
+}
+
+void trap_handle(struct trap_frame *frame)
+{
+    uint64_t code = frame->scause & SCAUSE_CODE_MASK;
+
+    if ((frame->scause & SCAUSE_INTERRUPT) != 0) {
+        handle_interrupt(frame, code);
+        return;
+    }
+
+    handle_exception(frame, code);
 }
