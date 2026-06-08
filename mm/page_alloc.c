@@ -429,6 +429,44 @@ uint64_t page_available_pages(void)
     return allocator.free_pages;
 }
 
+uint32_t phys_page_state(void *addr)
+{
+    if (!allocator.ready || !addr)
+    {
+        return PHYS_PAGE_INVALID;
+    }
+
+    uint64_t phys = (uint64_t)(uintptr_t)addr;
+    if ((phys % PAGE_SIZE) != 0)
+    {
+        return PHYS_PAGE_INVALID;
+    }
+
+    uint64_t pfn = phys / PAGE_SIZE;
+    if (pfn < allocator.base_pfn)
+    {
+        return PHYS_PAGE_INVALID;
+    }
+
+    uint64_t index = pfn_to_index(pfn);
+    if (!index_is_valid(index))
+    {
+        return PHYS_PAGE_INVALID;
+    }
+
+    if (page_is_free(index))
+    {
+        return PHYS_PAGE_FREE;
+    }
+
+    if (allocator.refcounts[index] != 0)
+    {
+        return PHYS_PAGE_ALLOCATED;
+    }
+
+    return PHYS_PAGE_RESERVED;
+}
+
 void *phys_alloc_pages(uint64_t pages)
 {
     if (!allocator.ready || pages == 0)

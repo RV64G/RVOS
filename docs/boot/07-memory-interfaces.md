@@ -32,6 +32,7 @@ uint64_t memory_available_pages(void);
 int page_allocator_init(void);
 int page_allocator_ready(void);
 uint64_t page_available_pages(void);
+uint32_t phys_page_state(void *addr);
 void *phys_alloc_pages(uint64_t pages);
 void phys_free_pages(void *addr, uint64_t pages);
 ```
@@ -44,6 +45,16 @@ void phys_free_pages(void *addr, uint64_t pages);
 `phys_alloc_pages()` 返回物理地址。当前内核保持恒等映射，所以早期代码可以直接把
 返回值当指针使用。后面引入非恒等 direct map 后，需要显式 `phys_to_virt()`。
 
+`phys_page_state()` 只查询一页当前状态，不改变分配器。它主要给调试、自检和后续
+地址空间管理使用：
+
+```text
+PHYS_PAGE_INVALID   : 页分配器未就绪、地址未对齐或超出管理范围
+PHYS_PAGE_FREE      : 当前可分配
+PHYS_PAGE_ALLOCATED : 当前已分配，metadata 页也属于这一类
+PHYS_PAGE_RESERVED  : 位于 PFN 覆盖范围内，但不是可分配页，通常是 memory map 洞
+```
+
 ## vm
 
 `vm` 操作 Sv39 页表，建立或解除 VA 到 PA 的映射。常用接口在 `mm/vm.h`：
@@ -54,6 +65,7 @@ int vm_space_create(struct vm_space *space);
 int vm_map_range(struct vm_space *space, uint64_t va, uint64_t pa, uint64_t size, uint64_t flags);
 int vm_identity_map(struct vm_space *space, uint64_t start, uint64_t size, uint64_t flags);
 int vm_unmap_range(struct vm_space *space, uint64_t va, uint64_t size);
+int vm_query(const struct vm_space *space, uint64_t va, struct vm_mapping *mapping);
 void vm_activate_sv39(const struct vm_space *space);
 ```
 
@@ -63,7 +75,19 @@ void vm_activate_sv39(const struct vm_space *space);
 - EFI loader 传入的启动材料。
 - DTB 或平台信息提供的 MMIO 地址。
 
+`VM_MAP_WRITE` 必须和 `VM_MAP_READ` 一起使用。RISC-V Sv39 把 `W=1,R=0` 的叶子 PTE
+定义为保留组合，`vm_map_range()` 会直接拒绝这种权限。
+
 `vm_unmap_range()` 只清 PTE，不释放物理页。释放物理页应该由更高层所有者决定。
+
+`vm_query()` 只读页表，用来查询一个虚拟地址是否已经映射。成功时返回：
+
+- `mapping.pa`：输入 VA 对应的物理地址，包含页内偏移。
+- `mapping.leaf_size`：覆盖这个 VA 的叶子 PTE 大小，可能是 4KB、2MB 或 1GB。
+- `mapping.flags`：`VM_MAP_READ/WRITE/EXEC` 权限组合。
+
+这个接口不会分配页表页，也不会刷新 TLB。后续测试、page fault 调试和用户地址空间
+管理可以用它确认页表状态。
 
 ## early_vm
 
