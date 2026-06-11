@@ -42,6 +42,11 @@ void phys_free_pages(void *addr, uint64_t pages);
 - bitmap 记录 PFN 当前是否空闲。
 - refcount 当前只使用 0/1，用来拒绝 double free、释放未分配页和越界释放。
 
+分配连续页时使用 next-fit 扫描：分配器会记住上次成功分配后的索引，下次从这个位置
+继续找，扫到末尾再回到开头。这样连续申请大量单页时，不会每次都从 bitmap 头部重新
+跳过已经分配的页。它仍然是简单线性扫描，不是 buddy；如果后面 fork、文件缓存或用户页
+带来更高压力，可以在不改外部接口的前提下替换内部算法。
+
 `phys_alloc_pages()` 返回物理地址。当前内核保持恒等映射，所以早期代码可以直接把
 返回值当指针使用。后面引入非恒等 direct map 后，需要显式 `phys_to_virt()`。
 
@@ -77,6 +82,14 @@ void vm_activate_sv39(const struct vm_space *space);
 
 `VM_MAP_WRITE` 必须和 `VM_MAP_READ` 一起使用。RISC-V Sv39 把 `W=1,R=0` 的叶子 PTE
 定义为保留组合，`vm_map_range()` 会直接拒绝这种权限。
+
+`vm_map_range()` 的对外语义是：成功时整段范围都完成映射，失败时不留下本次调用已经
+写入的叶子 PTE。当前实现选择“失败后回滚已经写入的 leaf 映射”，而不是复制一份新页表、
+成功后再整体切换。后者可以做到更完整的事务语义，但需要处理中间页表页引用计数、旧页表
+回收、`satp` 切换和多核 TLB shootdown；现在内核还处在单核早期阶段，成本比收益高。
+
+TODO：后续用户地址空间稳定后，可以把页表修改升级成“路径复制”或“事务日志”形式。到
+那时失败路径不仅要撤销 leaf PTE，也应该把本次新建但未使用的中间页表页归还给页分配器。
 
 `vm_unmap_range()` 只清 PTE，不释放物理页。释放物理页应该由更高层所有者决定。
 
@@ -166,6 +179,10 @@ block + block->units
 当前 `kfree()` 不会把完整空页还给 `phys_free_pages()`。页一旦交给 `kmalloc`，就留在
 内核堆内部复用。这样实现简单，但意味着页分配器看不到这些已经归还给 `kmalloc` 的
 空闲空间。后续如果出现长期运行内存压力，再补“整页归还”或 slab/size-class 分配器。
+
+因此 `make test` 里的 `kmalloc` 耗尽测试必须放在内存自检最后。它会让 `kmalloc` 一直
+扩堆直到无法再从页分配器拿页，然后验证失败返回和 `kfree` 链表路径；测试结束后不要求
+`page_available_pages()` 回到耗尽前。
 
 传统 K&R malloc 会把“向系统申请更多堆内存”的函数叫 `morecore()`。这里没有沿用这个
 名字，因为 `core` 是早期“主存”的说法，容易被误解成 CPU core。当前实现里这个步骤

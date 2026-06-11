@@ -16,7 +16,7 @@
  * A(accessed) 表示“这个页已经被访问过”，D(dirty) 表示“这个页已经被写过”。它们
  * 不是 cache 那样由硬件自动清零的状态位；通常是硬件或 OS 置 1，OS 在需要统计
  * 最近访问/写入情况时再主动清 0。RISC-V 允许两种实现：有的硬件会自动把 A/D 置
- * 1， 有的硬件会在 A/D 缺失时触发 page fault，让 OS 在异常处理里手动补位。
+ * 1，有的硬件会在 A/D 缺失时触发 page fault，让 OS 在异常处理里手动补位。
  *
  * 当前还没有 page fault handler，所以创建映射时预先置 A，并对可写页预先置 D。
  * 正式缺页异常接入后，可以再改成懒维护。
@@ -257,79 +257,6 @@ static int map_leaf(struct vm_space *space, uint64_t va, uint64_t pa,
     return 1;
 }
 
-static int map_range_inner(struct vm_space *space, uint64_t va, uint64_t pa,
-                           uint64_t size, uint64_t flags)
-{
-    /*
-     * vm_map_range() 负责把外部传入的地址/长度扩成 4KB 对齐范围；
-     * map_range_inner() 接手后，假设 va/pa 已经页对齐，并真正把这段范围拆成
-     * 若干个叶子 PTE 写入页表。
-     *
-     * 拆分策略是“能用大页就用大页”：
-     *
-     * - va、pa、剩余长度都满足 1GB 对齐/大小时，写 level-2 leaf；
-     * - 否则满足 2MB 条件时，写 level-1 leaf；
-     * - 最后退回 4KB level-0 leaf。
-     *
-     * 这里的循环不是在分配物理内存。pa 是调用者已经决定好的物理地址，本函数只
-     * 负责建立 va -> pa 的页表映射；中间页表页不够时，map_leaf() 会通过
-     * ensure_next_table() 分配页表页。
-     */
-    if (size == 0)
-    {
-        return 1;
-    }
-
-    if ((va % VM_PAGE_SIZE) != 0 || (pa % VM_PAGE_SIZE) != 0)
-    {
-        return 0;
-    }
-
-    uint64_t end = va + size;
-    if (end < va)
-    {
-        return 0;
-    }
-
-    while (va < end)
-    {
-        uint64_t remaining = end - va;
-
-        if (remaining >= PAGE_1G_SIZE && is_aligned(va, PAGE_1G_SIZE) &&
-            is_aligned(pa, PAGE_1G_SIZE))
-        {
-            if (!map_leaf(space, va, pa, PAGE_1G_SIZE, 2, flags))
-            {
-                return 0;
-            }
-            va += PAGE_1G_SIZE;
-            pa += PAGE_1G_SIZE;
-            continue;
-        }
-
-        if (remaining >= PAGE_2M_SIZE && is_aligned(va, PAGE_2M_SIZE) &&
-            is_aligned(pa, PAGE_2M_SIZE))
-        {
-            if (!map_leaf(space, va, pa, PAGE_2M_SIZE, 1, flags))
-            {
-                return 0;
-            }
-            va += PAGE_2M_SIZE;
-            pa += PAGE_2M_SIZE;
-            continue;
-        }
-
-        if (!map_leaf(space, va, pa, PAGE_4K_SIZE, 0, flags))
-        {
-            return 0;
-        }
-        va += PAGE_4K_SIZE;
-        pa += PAGE_4K_SIZE;
-    }
-
-    return 1;
-}
-
 static int unmap_one_leaf(struct vm_space *space, uint64_t va,
                           uint64_t *leaf_size)
 {
@@ -384,6 +311,115 @@ static int unmap_one_leaf(struct vm_space *space, uint64_t va,
     return 0;
 }
 
+static void rollback_mapped_prefix(struct vm_space *space, uint64_t start_va,
+                                   uint64_t end_va,
+                                   uint64_t mapped_pages_before)
+{
+    /*
+     * map_range_inner() 失败时，撤销本次已经写入的 leaf PTE，让对外接口保持
+     * “成功全映射，失败不留下部分 leaf 映射”的语义。
+     *
+     * 这里不回收映射过程中按需创建的中间页表页。空页表页不会暴露额外 VA->PA
+     * 映射，只是暂时多占几页内存。
+     *
+     * TODO: 等页表页引用计数、递归释放或路径复制事务稳定后，把失败路径里的中间
+     * 页表页也精确回收掉。
+     */
+    while (start_va < end_va)
+    {
+        uint64_t leaf_size = 0;
+        if (!unmap_one_leaf(space, start_va, &leaf_size))
+        {
+            break;
+        }
+        start_va += leaf_size;
+    }
+
+    space->mapped_pages = mapped_pages_before;
+    vm_flush_all();
+}
+
+static int map_range_inner(struct vm_space *space, uint64_t va, uint64_t pa,
+                           uint64_t size, uint64_t flags)
+{
+    /*
+     * vm_map_range() 负责把外部传入的地址/长度扩成 4KB 对齐范围；
+     * map_range_inner() 接手后，假设 va/pa 已经页对齐，并真正把这段范围拆成
+     * 若干个叶子 PTE 写入页表。
+     *
+     * 拆分策略是“能用大页就用大页”：
+     *
+     * - va、pa、剩余长度都满足 1GB 对齐/大小时，写 level-2 leaf；
+     * - 否则满足 2MB 条件时，写 level-1 leaf；
+     * - 最后退回 4KB level-0 leaf。
+     *
+     * 这里的循环不是在分配物理内存。pa 是调用者已经决定好的物理地址，本函数只
+     * 负责建立 va -> pa 的页表映射；中间页表页不够时，map_leaf() 会通过
+     * ensure_next_table() 分配页表页。
+     */
+    if (size == 0)
+    {
+        return 1;
+    }
+
+    if ((va % VM_PAGE_SIZE) != 0 || (pa % VM_PAGE_SIZE) != 0)
+    {
+        return 0;
+    }
+
+    uint64_t end = va + size;
+    if (end < va)
+    {
+        return 0;
+    }
+
+    uint64_t start_va = va;
+    uint64_t mapped_pages_before = space->mapped_pages;
+
+    while (va < end)
+    {
+        uint64_t remaining = end - va;
+
+        if (remaining >= PAGE_1G_SIZE && is_aligned(va, PAGE_1G_SIZE) &&
+            is_aligned(pa, PAGE_1G_SIZE))
+        {
+            if (!map_leaf(space, va, pa, PAGE_1G_SIZE, 2, flags))
+            {
+                rollback_mapped_prefix(space, start_va, va,
+                                       mapped_pages_before);
+                return 0;
+            }
+            va += PAGE_1G_SIZE;
+            pa += PAGE_1G_SIZE;
+            continue;
+        }
+
+        if (remaining >= PAGE_2M_SIZE && is_aligned(va, PAGE_2M_SIZE) &&
+            is_aligned(pa, PAGE_2M_SIZE))
+        {
+            if (!map_leaf(space, va, pa, PAGE_2M_SIZE, 1, flags))
+            {
+                rollback_mapped_prefix(space, start_va, va,
+                                       mapped_pages_before);
+                return 0;
+            }
+            va += PAGE_2M_SIZE;
+            pa += PAGE_2M_SIZE;
+            continue;
+        }
+
+        if (!map_leaf(space, va, pa, PAGE_4K_SIZE, 0, flags))
+        {
+            rollback_mapped_prefix(space, start_va, va, mapped_pages_before);
+            return 0;
+        }
+        va += PAGE_4K_SIZE;
+        pa += PAGE_4K_SIZE;
+    }
+
+    return 1;
+}
+
 void vm_space_init(struct vm_space *space)
 {
     space->root_table = 0;
@@ -416,19 +452,45 @@ int vm_map_range(struct vm_space *space, uint64_t va, uint64_t pa,
      * 物理位置。启动期现在都做恒等映射，满足这个条件。后面如果需要映射任意
      * va->pa，可以把这个检查放宽并更严格地处理 offset。
      */
+    if (!space || !space->root_table)
+    {
+        return 0;
+    }
+    if (size == 0)
+    {
+        return 1;
+    }
+    if (!vm_flags_are_valid(flags))
+    {
+        return 0;
+    }
+
     uint64_t aligned_va = align_down(va, VM_PAGE_SIZE);
     uint64_t offset = va - aligned_va;
     uint64_t aligned_pa = align_down(pa, VM_PAGE_SIZE);
-    uint64_t aligned_size = align_up(size + offset, VM_PAGE_SIZE);
+    if ((pa - aligned_pa) != offset)
+    {
+        return 0;
+    }
+    if (size > UINT64_MAX - offset)
+    {
+        return 0;
+    }
 
-    if (!space || !space->root_table || aligned_size < size ||
-        !vm_flags_are_valid(flags) || (pa - aligned_pa) != offset)
+    uint64_t requested_size = size + offset;
+    if (requested_size > UINT64_MAX - (VM_PAGE_SIZE - 1))
+    {
+        return 0;
+    }
+
+    uint64_t aligned_size = align_up(requested_size, VM_PAGE_SIZE);
+    if (!map_range_inner(space, aligned_va, aligned_pa, aligned_size, flags))
     {
         return 0;
     }
 
     space->mapped_ranges++;
-    return map_range_inner(space, aligned_va, aligned_pa, aligned_size, flags);
+    return 1;
 }
 
 int vm_identity_map(struct vm_space *space, uint64_t start, uint64_t size,

@@ -70,11 +70,68 @@ make run
 QEMU 保留 4 个 hart。启动日志里的 boot hart 不一定是 0，内核必须使用
 `boot_info->boot_hart_id`。
 
+QEMU 默认内存是 512M，普通运行和 `make test` 共用同一个 `QEMU_MEMORY` 参数。需要
+模拟更大内存时可以覆盖：
+
+```sh
+make run QEMU_MEMORY=2G
+make test QEMU_MEMORY=2G
+```
+
 退出 QEMU 控制台：
 
 ```text
 Ctrl-A，然后 X
 ```
+
+## 自动测试
+
+```sh
+make test
+```
+
+`make test` 是 CI 和本地共用的全流程入口。当前它会依次完成：
+
+- 构建 EFI app。
+- 用 `KERNEL_SELFTEST` 宏构建测试版 kernel ELF。
+- 检查测试版 kernel ELF 是否还有未定义符号。
+- 生成测试版 ESP 镜像。
+- 启动 QEMU/EDK2，等待内核日志出现 `Kernel selftest passed`。
+
+当前内核自检覆盖：
+
+- `page_alloc`：基本分配释放、double free 错误路径、单页分配直到耗尽、耗尽后失败
+  返回、释放后计数恢复。
+- `vm`：映射、查询、解除映射、冲突映射失败回滚。
+- `kmalloc`：`kzalloc` 清零、小块批量分配/释放/复用、大块分配、扩堆直到耗尽。
+
+内核现在还没有关机或退出系统调用，所以测试脚本不会等程序自然退出。它会在日志出现
+目标标记后主动结束 QEMU，并把完整日志保存在：
+
+```text
+build/test/qemu-selftest.log
+```
+
+`make test` 默认最多等待 45 秒，超过时间还没看到目标标记就判定失败，并打印完整 QEMU
+日志。需要临时放宽时可以覆盖：
+
+```sh
+make test QEMU_TEST_TIMEOUT=120
+```
+
+测试版产物保留在：
+
+```text
+build/test/kernel/kernel.elf
+build/test/esp.img
+```
+
+如果要上板运行同一套自检，可以把 `build/test/kernel/kernel.elf` 放到启动介质的
+`RVOS/KERNEL.ELF`。普通 `make all` / `make efi-esp` 的产物仍然放在 `build/kernel`
+和 `build/efi`，不会被 `make test` 覆盖。
+
+后续文件系统、用户态或系统调用测试也应该挂到 `make test` 下面。这样 CI、本地和开发
+容器只需要维护同一条测试入口。
 
 ## 上板启动
 

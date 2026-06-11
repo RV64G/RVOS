@@ -1,6 +1,6 @@
-#include "early_log.h"
-#include "boot_memory.h"
 #include "page_alloc.h"
+#include "boot_memory.h"
+#include "early_log.h"
 
 #define PAGE_SIZE 4096ULL
 #define BITS_PER_WORD 64ULL
@@ -9,8 +9,8 @@
  * 当前物理页分配器采用 bitmap + refcount。
  *
  * memory_probe() 先根据 EFI memory map 整理出 usable ranges，并排除内核镜像、
- * boot_info、最终 memory map、内核栈等启动保留页。page_allocator_init() 再把这些
- * usable ranges 导入 bitmap。
+ * boot_info、最终 memory map、内核栈等启动保留页。page_allocator_init()
+ * 再把这些 usable ranges 导入 bitmap。
  *
  * 设计目标：
  *
@@ -31,26 +31,28 @@ struct page_allocator_state
     int ready;
 
     /*
-     * bitmap 覆盖 [base_pfn, base_pfn + page_count) 这段 PFN 范围。这里的范围可能
-     * 包含不可用洞；洞里的页在 bitmap 中保持 used 状态，不会被分配出去。
+     * bitmap 覆盖 [base_pfn, base_pfn + page_count) 这段 PFN
+     * 范围。这里的范围可能 包含不可用洞；洞里的页在 bitmap 中保持 used
+     * 状态，不会被分配出去。
      */
     uint64_t base_pfn;
     uint64_t page_count;
 
     /*
-     * total_usable_pages 是从 memory_state 导入的可用页总数；free_pages 是当前还没
-     * 分配出去的页数。metadata 自身也从 usable pages 里扣掉。
+     * total_usable_pages 是从 memory_state 导入的可用页总数；free_pages
+     * 是当前还没 分配出去的页数。metadata 自身也从 usable pages 里扣掉。
      */
     uint64_t total_usable_pages;
     uint64_t free_pages;
 
     /*
-     * 元数据本身也放在物理内存里。初始化时从第一段足够大的 usable range 头部切出
-     * metadata_pages 页，并立刻在 bitmap/refcount 里标成已占用。
+     * 元数据本身也放在物理内存里。初始化时从第一段足够大的 usable range
+     * 头部切出 metadata_pages 页，并立刻在 bitmap/refcount 里标成已占用。
      */
     uint64_t metadata_phys;
     uint64_t metadata_pages;
     uint64_t bitmap_words;
+    uint64_t next_search_index;
 
     /*
      * free_bitmap: bit=1 表示空闲，bit=0 表示不可用或已分配。
@@ -113,7 +115,8 @@ static uint64_t bitmap_mask(uint64_t index)
 
 static int page_is_free(uint64_t index)
 {
-    return (allocator.free_bitmap[bitmap_word(index)] & bitmap_mask(index)) != 0;
+    return (allocator.free_bitmap[bitmap_word(index)] & bitmap_mask(index)) !=
+           0;
 }
 
 static void mark_page_free(uint64_t index)
@@ -136,6 +139,7 @@ static void reset_allocator(void)
     allocator.metadata_phys = 0;
     allocator.metadata_pages = 0;
     allocator.bitmap_words = 0;
+    allocator.next_search_index = 0;
     allocator.free_bitmap = 0;
     allocator.refcounts = 0;
 }
@@ -143,9 +147,10 @@ static void reset_allocator(void)
 static int find_pfn_span(const struct boot_memory_state *memory)
 {
     /*
-     * bitmap 需要一个连续的索引空间。这里找出所有 usable ranges 覆盖到的最小/最大
-     * PFN，形成 [base_pfn, base_pfn + page_count)。中间如果有洞，后续不会被
-     * mark_usable_range() 标为空闲，因此不会被分配。
+     * bitmap 需要一个连续的索引空间。这里找出所有 usable ranges
+     * 覆盖到的最小/最大 PFN，形成 [base_pfn, base_pfn +
+     * page_count)。中间如果有洞，后续不会被 mark_usable_range()
+     * 标为空闲，因此不会被分配。
      */
     uint64_t min_pfn = UINT64_MAX;
     uint64_t max_pfn = 0;
@@ -187,18 +192,21 @@ static uint64_t metadata_size_bytes(void)
      * base_pfn 直接定位；代价是如果物理地址空间很稀疏，bitmap/refcount 会多覆盖
      * 一些洞。对当前 QEMU/板子规模这比复杂 sparse mem 更合适。
      */
-    allocator.bitmap_words = align_up(allocator.page_count, BITS_PER_WORD) / BITS_PER_WORD;
+    allocator.bitmap_words =
+        align_up(allocator.page_count, BITS_PER_WORD) / BITS_PER_WORD;
 
     /*
      * 这些乘法结果会决定后面实际保留多少元数据空间。先判断乘法是否会超过
      * uint64_t 上限，避免回绕成一个很小的值，导致 bitmap/refcount 写出预留区。
      */
-    if (allocator.bitmap_words > UINT64_MAX / sizeof(uint64_t)) {
+    if (allocator.bitmap_words > UINT64_MAX / sizeof(uint64_t))
+    {
         return 0;
     }
     uint64_t bitmap_bytes = allocator.bitmap_words * sizeof(uint64_t);
 
-    if (allocator.page_count > UINT64_MAX / sizeof(uint16_t)) {
+    if (allocator.page_count > UINT64_MAX / sizeof(uint16_t))
+    {
         return 0;
     }
     uint64_t refcount_bytes = allocator.page_count * sizeof(uint16_t);
@@ -211,9 +219,8 @@ static uint64_t metadata_size_bytes(void)
     return bitmap_bytes + refcount_bytes;
 }
 
-static int reserve_metadata_storage(
-    const struct boot_memory_state *memory,
-    uint64_t metadata_bytes)
+static int reserve_metadata_storage(const struct boot_memory_state *memory,
+                                    uint64_t metadata_bytes)
 {
     /*
      * 这里还不能调用 phys_alloc_pages()，因为页分配器自己还没初始化完成。
@@ -222,7 +229,8 @@ static int reserve_metadata_storage(
      * reserve_allocated_range() 完成。
      */
     allocator.metadata_pages = pages_for_size(metadata_bytes);
-    if (allocator.metadata_pages > UINT64_MAX / PAGE_SIZE) {
+    if (allocator.metadata_pages > UINT64_MAX / PAGE_SIZE)
+    {
         return 0;
     }
     uint64_t metadata_size = allocator.metadata_pages * PAGE_SIZE;
@@ -237,7 +245,9 @@ static int reserve_metadata_storage(
 
         allocator.metadata_phys = range->start;
         allocator.free_bitmap = (uint64_t *)(uintptr_t)allocator.metadata_phys;
-        allocator.refcounts = (uint16_t *)(uintptr_t)(allocator.metadata_phys + allocator.bitmap_words * sizeof(uint64_t));
+        allocator.refcounts =
+            (uint16_t *)(uintptr_t)(allocator.metadata_phys +
+                                    allocator.bitmap_words * sizeof(uint64_t));
         zero_bytes((void *)(uintptr_t)allocator.metadata_phys, metadata_size);
         return 1;
     }
@@ -248,8 +258,9 @@ static int reserve_metadata_storage(
 static void mark_usable_range(const struct phys_range *range)
 {
     /*
-     * 把 memory_probe() 认为可用的页标成 free。没有出现在 usable_ranges 里的 PFN
-     * 保持 bit=0，即“不可分配”。因此 bitmap 可以覆盖洞，但不会把洞误当内存。
+     * 把 memory_probe() 认为可用的页标成 free。没有出现在 usable_ranges 里的
+     * PFN 保持 bit=0，即“不可分配”。因此 bitmap
+     * 可以覆盖洞，但不会把洞误当内存。
      */
     uint64_t start_pfn = range->start / PAGE_SIZE;
     uint64_t end_pfn = range->end / PAGE_SIZE;
@@ -304,17 +315,13 @@ static int reserve_allocated_range(uint64_t phys, uint64_t pages)
     return 1;
 }
 
-static int find_free_run(uint64_t pages, uint64_t *start_index)
+static int find_free_run_in_range(uint64_t begin, uint64_t end, uint64_t pages,
+                                  uint64_t *start_index)
 {
-    /*
-     * 查找 pages 个连续空闲页。第一版采用线性 first-fit 扫描，逻辑简单且便于调试。
-     * 后续如果 fork/exec 和文件缓存带来更高分配压力，可以把内部替换成 buddy，
-     * 对外 phys_alloc_pages()/phys_free_pages() 接口不必变。
-     */
     uint64_t run_start = 0;
     uint64_t run_pages = 0;
 
-    for (uint64_t i = 0; i < allocator.page_count; i++)
+    for (uint64_t i = begin; i < end; i++)
     {
         if (!page_is_free(i))
         {
@@ -336,6 +343,43 @@ static int find_free_run(uint64_t pages, uint64_t *start_index)
     }
 
     return 0;
+}
+
+static int find_free_run(uint64_t pages, uint64_t *start_index)
+{
+    /*
+     * 查找 pages 个连续空闲页。这里采用
+     * next-fit：从上次成功分配后的游标继续扫描，
+     * 扫到末尾后再绕回开头。这样连续申请大量单页时，不会每次都从 bitmap
+     * 头部重新 跳过已经分配的页。
+     *
+     * 它仍然不是最终高性能方案；后续如果 fork/exec 和文件缓存带来更高分配压力，
+     * 可以把内部替换成 buddy，对外 phys_alloc_pages()/phys_free_pages()
+     * 接口不必变。
+     */
+    if (pages > allocator.page_count)
+    {
+        return 0;
+    }
+
+    uint64_t cursor = allocator.next_search_index;
+    if (cursor >= allocator.page_count) // 代码不出错，但防止意外修改
+    {
+        cursor = 0;
+    }
+
+    /*
+     * 多页连续分配不能跨过 bitmap
+     * 尾部再接到头部。这里分两段扫描，绕回后重新计算 run，保证返回的范围在物理
+     * PFN 上真实连续。
+     */
+    if (find_free_run_in_range(cursor, allocator.page_count, pages,
+                               start_index))
+    {
+        return 1;
+    }
+
+    return find_free_run_in_range(0, cursor, pages, start_index);
 }
 
 static int allocated_range_is_valid(uint64_t start_index, uint64_t pages)
@@ -397,7 +441,8 @@ int page_allocator_init(void)
     }
 
     uint64_t metadata_bytes = metadata_size_bytes();
-    if (metadata_bytes == 0 || !reserve_metadata_storage(memory, metadata_bytes))
+    if (metadata_bytes == 0 ||
+        !reserve_metadata_storage(memory, metadata_bytes))
     {
         early_puts("Page allocator metadata allocation failed\r\n");
         return 0;
@@ -408,7 +453,8 @@ int page_allocator_init(void)
         mark_usable_range(&memory->usable_ranges[i]);
     }
 
-    if (!reserve_allocated_range(allocator.metadata_phys, allocator.metadata_pages))
+    if (!reserve_allocated_range(allocator.metadata_phys,
+                                 allocator.metadata_pages))
     {
         early_puts("Page allocator metadata reservation failed\r\n");
         return 0;
@@ -491,6 +537,11 @@ void *phys_alloc_pages(uint64_t pages)
         allocator.refcounts[index] = 1;
     }
     allocator.free_pages -= pages;
+    allocator.next_search_index = start_index + pages;
+    if (allocator.next_search_index >= allocator.page_count)
+    {
+        allocator.next_search_index = 0;
+    }
 
     uint64_t phys = index_to_pfn(start_index) * PAGE_SIZE;
     return (void *)(uintptr_t)phys;
@@ -531,4 +582,8 @@ void phys_free_pages(void *addr, uint64_t pages)
         mark_page_free(index);
     }
     allocator.free_pages += pages;
+    if (start_index < allocator.next_search_index)
+    {
+        allocator.next_search_index = start_index;
+    }
 }

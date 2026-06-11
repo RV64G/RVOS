@@ -14,6 +14,9 @@ BUILD_DIR  = build
 TFTP_ROOT ?= /tmp/rvos-tftp
 TFTP_IFACE ?= enp55s0
 TFTP_HOST ?= 10.90.50.43
+QEMU_TEST_LOG ?= $(BUILD_DIR)/test/qemu-selftest.log
+QEMU_TEST_TIMEOUT ?= 45
+QEMU_TEST_MARKER ?= Kernel selftest passed
 
 include mk/kernel.mk
 include mk/efi.mk
@@ -39,7 +42,7 @@ run: $(EFI_ESP_IMAGE) $(QEMU_EFI_VARS)
 	@$(QEMU) -M ? | grep virt >/dev/null || exit
 	@echo "Press Ctrl-A and then X to exit QEMU"
 	@echo "------------------------------------"
-	@$(QEMU) $(QEMU_EFI_QFLAGS)
+	@$(call qemu-run,$(EFI_ESP_IMAGE))
 
 # Print selected toolchain commands
 toolchain:
@@ -57,6 +60,25 @@ toolchain:
 # Show undefined symbols in the linked ELF
 check-undef: $(KERNEL_ELF)
 	@$(NM) -u $(KERNEL_ELF)
+
+check-selftest-undef: $(KERNEL_TEST_ELF)
+	@$(NM) -u $(KERNEL_TEST_ELF)
+
+test-build: efi-test-esp check-selftest-undef
+	@echo "Selftest build and link checks passed"
+
+test-qemu: $(EFI_TEST_ESP_IMAGE) $(QEMU_EFI_VARS)
+	@echo "Running QEMU kernel selftest..."
+	@sh scripts/qemu-wait-for-log.sh \
+		"$(QEMU_TEST_LOG)" \
+		"$(QEMU_TEST_TIMEOUT)" \
+		"$(QEMU_TEST_MARKER)" \
+		-- \
+		$(call qemu-run,$(EFI_TEST_ESP_IMAGE))
+	@echo "QEMU log: $(QEMU_TEST_LOG)"
+
+test: test-build test-qemu
+	@echo "All tests passed"
 
 # Generate clangd/IDE compile database.
 compile-commands:
@@ -99,4 +121,4 @@ wall:
 	@($(MAKE) -k all CFLAGS_WARN="$(CFLAGS_WARN_STRICT)" > wall_warnings.log 2>&1) || true
 	@echo "Strict compilation finished. Check wall_warnings.log for details."
 
-.PHONY: all clean run wall code txt toolchain check-undef compile-commands tftp-sync tftp-serve size
+.PHONY: all clean run wall code txt toolchain check-undef check-selftest-undef test-build test-qemu test compile-commands tftp-sync tftp-serve size

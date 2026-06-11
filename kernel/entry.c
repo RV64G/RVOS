@@ -7,6 +7,7 @@
 #include "page_alloc.h"
 #include "platform.h"
 #include "printk.h"
+#include "selftest.h"
 #include "timer.h"
 #include "trap.h"
 
@@ -146,6 +147,11 @@ void kernel_entry(struct kernel_boot_info *boot_info)
     trap_init();
     if (!timer_init())
         goto HALT;
+#ifdef KERNEL_SELFTEST
+    if (!kernel_selftest_run())
+        goto HALT;
+    printk("Kernel selftest passed\r\n");
+#endif
 HALT:
     early_halt_forever();
 }
