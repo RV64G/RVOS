@@ -160,3 +160,19 @@ timer 子系统不在 `timer_schedule_ms()` 里偷偷 `kmalloc()`，也不会在
 当前回调仍然直接在 timer interrupt 里运行，所以回调必须很短，不能长时间打印、等待
 锁、阻塞或者做复杂工作。等调度器和软中断/工作队列成形后，可以把耗时逻辑从硬中断
 路径里移出去。
+
+## 自检
+
+`KERNEL_SELFTEST` 构建会先注册一个 1ms 一次性 timer event，确认它只触发一次；再注册
+一个 1ms 周期 timer event。自检主线用 `wfi` 等待 timer interrupt，回调只递增一个
+计数器，不打印、不分配内存。周期事件计数达到目标后取消，再短暂轮询确认取消后不会
+继续触发。
+
+这条测试覆盖：
+
+- `timer_schedule_ms()` 的毫秒到 cycles 换算和插入链表；
+- supervisor timer interrupt 进入统一 trap 入口；
+- `trap_handle()` 分发到 `timer_handle_interrupt()`；
+- 一次性 timer 触发后不再留在链表中；
+- 周期 timer 重新插入；
+- `timer_cancel()` 从 timer list 移除事件。

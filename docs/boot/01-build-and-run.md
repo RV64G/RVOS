@@ -100,6 +100,9 @@ make test
 
 当前内核自检覆盖：
 
+- `trap`：固定 32-bit `ebreak` 进入 trap，handler 推进 `sepc` 后返回。
+- `timer`：注册 1ms 一次性事件和周期事件，等待 timer interrupt 回调触发，再取消
+  周期事件。
 - `page_alloc`：基本分配释放、double free 错误路径、单页分配直到耗尽、耗尽后失败
   返回、释放后计数恢复。
 - `vm`：映射、查询、解除映射、冲突映射失败回滚。

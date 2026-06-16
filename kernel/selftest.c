@@ -5,10 +5,14 @@
 #include "kmalloc.h"
 #include "page_alloc.h"
 #include "printk.h"
+#include "riscv/sbi.h"
+#include "timer.h"
 #include "vm.h"
 
 #define SELFTEST_KMALLOC_BATCH 128ULL
 #define KMALLOC_EXHAUST_OBJECT_SIZE (64ULL * 1024ULL)
+
+static volatile uint64_t timer_selftest_count;
 
 static int fail(const char *name)
 {
@@ -37,6 +41,116 @@ static int bytes_are_zero(const void *ptr, uint64_t size)
             return 0;
         }
     }
+    return 1;
+}
+
+static void cpu_relax(void)
+{
+    __asm__ volatile("nop" ::: "memory");
+}
+
+static void wait_cycles(uint64_t cycles)
+{
+    uint64_t start = sbi_get_time();
+    while (sbi_get_time() - start < cycles)
+    {
+        cpu_relax();
+    }
+}
+
+static int wait_for_timer_count(uint64_t target, uint64_t timeout_ms)
+{
+    uint64_t timeout_cycles = timer_ms_to_cycles(timeout_ms);
+    uint64_t start = sbi_get_time();
+
+    while (timer_selftest_count < target)
+    {
+        if (sbi_get_time() - start > timeout_cycles)
+        {
+            return 0;
+        }
+
+        /*
+         * timer event 已经设置了下一次 SBI deadline。这里用 wfi 等中断，避免自检在
+         * 等待 timer 回调时空转烧 CPU。
+         */
+        __asm__ volatile("wfi" ::: "memory");
+    }
+
+    return 1;
+}
+
+static void timer_selftest_callback(struct timer_event *event, void *context)
+{
+    (void)event;
+    (void)context;
+
+    timer_selftest_count++;
+}
+
+static int test_trap_breakpoint(void)
+{
+    printk("Selftest trap breakpoint start\r\n");
+
+    /*
+     * 使用固定 32-bit ebreak 编码。trap handler 当前按 4 字节推进 sepc，如果 assembler
+     * 生成 16-bit c.ebreak，自检就不能证明这条路径正确。
+     */
+    __asm__ volatile(".word 0x00100073" ::: "memory");
+
+    printk("Selftest trap breakpoint done\r\n");
+    return 1;
+}
+
+static int test_timer(void)
+{
+    printk("Selftest timer start\r\n");
+
+    struct timer_event event;
+    timer_selftest_count = 0;
+    timer_event_init(&event, timer_selftest_callback, 0);
+
+    if (!timer_schedule_ms(&event, 1, 0))
+    {
+        return fail("timer oneshot schedule");
+    }
+    if (!wait_for_timer_count(1, 100))
+    {
+        return fail("timer oneshot callback");
+    }
+    if (event.active)
+    {
+        return fail("timer oneshot still active");
+    }
+    uint64_t count_after_oneshot = timer_selftest_count;
+    wait_cycles(timer_ms_to_cycles(5));
+    if (timer_selftest_count != count_after_oneshot)
+    {
+        return fail("timer oneshot fired twice");
+    }
+
+    timer_selftest_count = 0;
+    timer_event_init(&event, timer_selftest_callback, 0);
+
+    if (!timer_schedule_ms(&event, 1, 1))
+    {
+        return fail("timer periodic schedule");
+    }
+    if (!wait_for_timer_count(3, 100))
+    {
+        timer_cancel(&event);
+        return fail("timer periodic callback");
+    }
+
+    timer_cancel(&event);
+    uint64_t count_after_cancel = timer_selftest_count;
+    wait_cycles(timer_ms_to_cycles(5));
+    if (timer_selftest_count != count_after_cancel)
+    {
+        return fail("timer callback after cancel");
+    }
+
+    printk("Selftest timer done\r\n");
     return 1;
 }
 
@@ -81,7 +195,7 @@ static int test_page_allocator(void)
 
     /*
      * 真正把页分配器压到耗尽：记录每次分到的页，直到 phys_alloc_pages(1)
-     * 返回失败。这个测试会覆盖 first-fit 扫描到内存尾部、free_pages 归零、失败
+     * 返回失败。这个测试会覆盖 next-fit 扫描到内存尾部、free_pages 归零、失败
      * 返回路径，以及大批量释放后的计数恢复。
      *
      * 为了不让 kmalloc 额外吃页、干扰计数，测试直接把“下一页”的指针写进刚分到
@@ -326,6 +440,14 @@ int kernel_selftest_run(void)
 {
     printk("Kernel selftest start\r\n");
 
+    if (!test_trap_breakpoint())
+    {
+        return 0;
+    }
+    if (!test_timer())
+    {
+        return 0;
+    }
     if (!test_page_allocator())
     {
         return 0;
