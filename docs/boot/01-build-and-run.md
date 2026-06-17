@@ -98,11 +98,19 @@ make test
 - 生成测试版 ESP 镜像。
 - 启动 QEMU/EDK2，等待内核日志出现 `Kernel selftest passed`。
 
+kernel 构建会为 C 和汇编源生成 `.d` 依赖文件。修改 `task.h`、`list.h` 这类头文件后，
+依赖它们的目标文件会自动重编，不需要手动 `make clean`。
+
 当前内核自检覆盖：
 
 - `trap`：固定 32-bit `ebreak` 进入 trap，handler 推进 `sepc` 后返回。
 - `timer`：注册 1ms 一次性事件和周期事件，等待 timer interrupt 回调触发，再取消
   周期事件。
+- `task`：创建两个内核 task，在独立内核栈之间主动 `yield`，确认运行次数和 ZOMBIE
+  状态。
+- `task sleep`：task 进入 `BLOCKED`，由内嵌 timer event 到期唤醒，再回到 READY。
+- `task preemption`：注册周期 timer 请求调度，确认 trap 返回路径能恢复另一个 task 的
+  `trap_frame`。
 - `page_alloc`：基本分配释放、double free 错误路径、单页分配直到耗尽、耗尽后失败
   返回、释放后计数恢复。
 - `vm`：映射、查询、解除映射、冲突映射失败回滚。

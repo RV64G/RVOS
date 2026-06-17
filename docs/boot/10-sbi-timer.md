@@ -20,6 +20,7 @@ trap_vector
         -> timer_handle_interrupt()
            -> timer_run_due_events()：按 rdtime cycles 处理已经到期的 timer event。
            -> sbi_set_timer(deadline)：设置下一次硬件 timer interrupt。
+        -> sched_from_trap(frame)：如果 timer 回调请求调度，切换返回现场。
 ```
 
 ## timebase_frequency
@@ -44,6 +45,10 @@ some_timer:
 后续如果需要调试输出、自测事件、sleep、IO timeout 或调度时间片，都应该通过这套接口
 注册。debug/test 怎么组织单独讨论，不放进 timer 核心。
 
+现在 task 自检已经用这套接口注册了一个 1ms 周期事件。这个事件的回调只调用
+`sched_request_reschedule()`，不直接切换 task。真正的切换发生在 `trap_handle()` 即将
+返回时，因为那时当前执行流的寄存器已经完整保存在 `trap_frame` 里。
+
 ## cycles 和 timer event
 
 当前 timer 子系统只用一种时间判断事件到期：
@@ -53,9 +58,9 @@ rdtime cycles:
   硬件单调时间。timer list、sleep、timeout 使用它判断是否到期。
 ```
 
-调度 tick 暂时不做。以后做 RR 时间片时，可以由调度器注册一个周期 timer，或者在调度
-模块里单独维护 tick 计数。但 sleep、timeout、周期任务仍应该继续使用 `rdtime` cycles，
-避免把“内核处理过多少次调度节拍”和“真实时间过去多少”混在一起。
+调度 tick 不内置在 timer core 里。做 RR 时间片时，由 task/scheduler 模块注册周期
+timer，并在回调里请求调度。但 sleep、timeout、周期任务仍应该继续使用 `rdtime`
+cycles，避免把“内核处理过多少次调度节拍”和“真实时间过去多少”混在一起。
 
 硬件 timer 只有一个下一次 deadline，所以每次重新编程时直接使用 timer list 头节点的
 `deadline_cycles`：
@@ -161,6 +166,10 @@ timer 子系统不在 `timer_schedule_ms()` 里偷偷 `kmalloc()`，也不会在
 锁、阻塞或者做复杂工作。等调度器和软中断/工作队列成形后，可以把耗时逻辑从硬中断
 路径里移出去。
 
+这也是调度回调只置位的原因：timer list 正在遍历到期事件，如果在回调里直接
+`context_switch()`，会把 timer core 的内部状态和当前 task 的中断现场混在一起。先置位，
+再由 trap 返回路径统一切换，边界更清楚。
+
 ## 自检
 
 `KERNEL_SELFTEST` 构建会先注册一个 1ms 一次性 timer event，确认它只触发一次；再注册
@@ -176,3 +185,4 @@ timer 子系统不在 `timer_schedule_ms()` 里偷偷 `kmalloc()`，也不会在
 - 一次性 timer 触发后不再留在链表中；
 - 周期 timer 重新插入；
 - `timer_cancel()` 从 timer list 移除事件。
+- task 层注册周期 timer 请求调度，trap 返回路径恢复另一个 task 的 `trap_frame`。
