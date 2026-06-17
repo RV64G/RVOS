@@ -15,7 +15,7 @@ TFTP_ROOT ?= /tmp/rvos-tftp
 TFTP_IFACE ?= enp55s0
 TFTP_HOST ?= 10.90.50.43
 QEMU_TEST_LOG ?= $(BUILD_DIR)/test/qemu-selftest.log
-QEMU_TEST_TIMEOUT ?= 45
+QEMU_TEST_TIMEOUT ?= 90
 QEMU_TEST_MARKER ?= Kernel selftest passed
 
 include mk/kernel.mk

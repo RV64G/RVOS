@@ -1,6 +1,8 @@
 #include "page_alloc.h"
+#include "align.h"
 #include "boot_memory.h"
 #include "early_log.h"
+#include "string.h"
 
 #define PAGE_SIZE 4096ULL
 #define BITS_PER_WORD 64ULL
@@ -64,11 +66,6 @@ struct page_allocator_state
 
 static struct page_allocator_state allocator;
 
-static uint64_t align_up(uint64_t value, uint64_t align)
-{
-    return (value + align - 1) & ~(align - 1);
-}
-
 static uint64_t pages_for_size(uint64_t size)
 {
     return (size + PAGE_SIZE - 1) / PAGE_SIZE;
@@ -77,15 +74,6 @@ static uint64_t pages_for_size(uint64_t size)
 static uint64_t range_pages(const struct phys_range *range)
 {
     return (range->end - range->start) / PAGE_SIZE;
-}
-
-static void zero_bytes(void *ptr, uint64_t size)
-{
-    uint8_t *bytes = (uint8_t *)ptr;
-    for (uint64_t i = 0; i < size; i++)
-    {
-        bytes[i] = 0;
-    }
 }
 
 static uint64_t pfn_to_index(uint64_t pfn)
@@ -248,7 +236,7 @@ static int reserve_metadata_storage(const struct boot_memory_state *memory,
         allocator.refcounts =
             (uint16_t *)(uintptr_t)(allocator.metadata_phys +
                                     allocator.bitmap_words * sizeof(uint64_t));
-        zero_bytes((void *)(uintptr_t)allocator.metadata_phys, metadata_size);
+        memzero((void *)(uintptr_t)allocator.metadata_phys, metadata_size);
         return 1;
     }
 

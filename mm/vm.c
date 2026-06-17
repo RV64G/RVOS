@@ -1,6 +1,8 @@
 #include "vm.h"
 
+#include "align.h"
 #include "page_alloc.h"
+#include "string.h"
 
 #define PTE_COUNT 512ULL
 
@@ -35,21 +37,6 @@
 #define PAGE_4K_SIZE (1ULL << PAGE_4K_SHIFT)
 #define PAGE_2M_SIZE (1ULL << PAGE_2M_SHIFT)
 #define PAGE_1G_SIZE (1ULL << PAGE_1G_SHIFT)
-
-static uint64_t align_down(uint64_t value, uint64_t align)
-{
-    return value & ~(align - 1);
-}
-
-static uint64_t align_up(uint64_t value, uint64_t align)
-{
-    return (value + align - 1) & ~(align - 1);
-}
-
-static int is_aligned(uint64_t value, uint64_t align)
-{
-    return (value & (align - 1)) == 0;
-}
 
 static uint64_t pte_to_phys(pte_t pte)
 {
@@ -165,15 +152,6 @@ static int vm_flags_are_valid(uint64_t flags)
     return 1;
 }
 
-static void zero_page(void *page)
-{
-    uint64_t *words = (uint64_t *)page;
-    for (uint64_t i = 0; i < VM_PAGE_SIZE / sizeof(uint64_t); i++)
-    {
-        words[i] = 0;
-    }
-}
-
 static pte_t *allocate_page_table(struct vm_space *space)
 {
     void *page = phys_alloc_pages(1);
@@ -186,7 +164,7 @@ static pte_t *allocate_page_table(struct vm_space *space)
      * 当前内核仍保持物理地址恒等映射，所以物理页地址可以直接当指针清零。
      * 后面引入非恒等 direct map 后，这里需要改成 phys_to_virt()。
      */
-    zero_page(page);
+    memzero(page, VM_PAGE_SIZE);
     space->page_table_pages++;
     return (pte_t *)page;
 }
