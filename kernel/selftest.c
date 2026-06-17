@@ -6,13 +6,25 @@
 #include "page_alloc.h"
 #include "printk.h"
 #include "riscv/sbi.h"
+#include "sched.h"
+#include "task.h"
 #include "timer.h"
 #include "vm.h"
 
 #define SELFTEST_KMALLOC_BATCH 128ULL
 #define KMALLOC_EXHAUST_OBJECT_SIZE (64ULL * 1024ULL)
+#define TASK_SELFTEST_STACK_PAGES 2ULL
+#define TASK_SELFTEST_ROUNDS 8ULL
+#define TASK_PREEMPT_TARGET 64ULL
+#define TASK_PREEMPT_TIMEOUT_MS 500ULL
 
 static volatile uint64_t timer_selftest_count;
+static volatile uint64_t task_a_runs;
+static volatile uint64_t task_b_runs;
+static volatile uint64_t task_sleep_before;
+static volatile uint64_t task_sleep_after;
+static volatile uint64_t task_preempt_a_runs;
+static volatile uint64_t task_preempt_b_runs;
 
 static int fail(const char *name)
 {
@@ -151,6 +163,277 @@ static int test_timer(void)
     }
 
     printk("Selftest timer done\r\n");
+    return 1;
+}
+
+static void task_selftest_entry(void *arg)
+{
+    volatile uint64_t *counter = (volatile uint64_t *)arg;
+
+    for (uint64_t i = 0; i < TASK_SELFTEST_ROUNDS; i++)
+    {
+        (*counter)++;
+        task_yield();
+    }
+}
+
+static int test_task_switch(void)
+{
+    printk("Selftest task switch start\r\n");
+
+    struct task boot_task;
+    struct task task_a;
+    struct task task_b;
+    void *stack_a = phys_alloc_pages(TASK_SELFTEST_STACK_PAGES);
+    void *stack_b = phys_alloc_pages(TASK_SELFTEST_STACK_PAGES);
+    if (!stack_a || !stack_b)
+    {
+        if (stack_a)
+        {
+            phys_free_pages(stack_a, TASK_SELFTEST_STACK_PAGES);
+        }
+        if (stack_b)
+        {
+            phys_free_pages(stack_b, TASK_SELFTEST_STACK_PAGES);
+        }
+        return fail("task stack allocation");
+    }
+
+    task_a_runs = 0;
+    task_b_runs = 0;
+    task_system_init(&boot_task, "selftest-main");
+    if (!task_create(&task_a, "selftest-a", stack_a,
+                     TASK_SELFTEST_STACK_PAGES * VM_PAGE_SIZE,
+                     task_selftest_entry, (void *)&task_a_runs))
+    {
+        task_system_reset();
+        phys_free_pages(stack_a, TASK_SELFTEST_STACK_PAGES);
+        phys_free_pages(stack_b, TASK_SELFTEST_STACK_PAGES);
+        return fail("task create a");
+    }
+    if (!task_create(&task_b, "selftest-b", stack_b,
+                     TASK_SELFTEST_STACK_PAGES * VM_PAGE_SIZE,
+                     task_selftest_entry, (void *)&task_b_runs))
+    {
+        task_system_reset();
+        phys_free_pages(stack_a, TASK_SELFTEST_STACK_PAGES);
+        phys_free_pages(stack_b, TASK_SELFTEST_STACK_PAGES);
+        return fail("task create b");
+    }
+
+    for (uint64_t guard = 0;
+         (task_a.state != TASK_ZOMBIE || task_b.state != TASK_ZOMBIE) &&
+         guard < TASK_SELFTEST_ROUNDS * 8;
+         guard++)
+    {
+        task_yield();
+    }
+
+    if (task_a.state != TASK_ZOMBIE || task_b.state != TASK_ZOMBIE)
+    {
+        task_system_reset();
+        phys_free_pages(stack_a, TASK_SELFTEST_STACK_PAGES);
+        phys_free_pages(stack_b, TASK_SELFTEST_STACK_PAGES);
+        return fail("task switch did not finish");
+    }
+    if (task_a_runs != TASK_SELFTEST_ROUNDS ||
+        task_b_runs != TASK_SELFTEST_ROUNDS)
+    {
+        task_system_reset();
+        phys_free_pages(stack_a, TASK_SELFTEST_STACK_PAGES);
+        phys_free_pages(stack_b, TASK_SELFTEST_STACK_PAGES);
+        return fail("task switch counters");
+    }
+
+    task_system_reset();
+    phys_free_pages(stack_a, TASK_SELFTEST_STACK_PAGES);
+    phys_free_pages(stack_b, TASK_SELFTEST_STACK_PAGES);
+
+    printk("Selftest task switch done\r\n");
+    return 1;
+}
+
+static void task_sleep_entry(void *arg)
+{
+    (void)arg;
+
+    task_sleep_before++;
+    if (!task_sleep_ms(2))
+    {
+        task_sleep_after = UINT64_MAX;
+        return;
+    }
+    task_sleep_after++;
+}
+
+static int test_task_sleep(void)
+{
+    printk("Selftest task sleep start\r\n");
+
+    struct task boot_task;
+    struct task sleeper;
+    void *stack = phys_alloc_pages(TASK_SELFTEST_STACK_PAGES);
+    if (!stack)
+    {
+        return fail("task sleep stack allocation");
+    }
+
+    task_sleep_before = 0;
+    task_sleep_after = 0;
+    task_system_init(&boot_task, "selftest-sleep-main");
+    if (!task_create(&sleeper, "sleep-task", stack,
+                     TASK_SELFTEST_STACK_PAGES * VM_PAGE_SIZE,
+                     task_sleep_entry, 0))
+    {
+        task_system_reset();
+        phys_free_pages(stack, TASK_SELFTEST_STACK_PAGES);
+        return fail("task sleep create");
+    }
+
+    task_yield();
+    if (task_sleep_before != 1 || sleeper.state != TASK_BLOCKED)
+    {
+        task_system_reset();
+        phys_free_pages(stack, TASK_SELFTEST_STACK_PAGES);
+        return fail("task sleep did not block");
+    }
+
+    uint64_t timeout_cycles = timer_ms_to_cycles(100);
+    uint64_t start = sbi_get_time();
+    while (sleeper.state != TASK_ZOMBIE)
+    {
+        if (sbi_get_time() - start > timeout_cycles)
+        {
+            task_system_reset();
+            phys_free_pages(stack, TASK_SELFTEST_STACK_PAGES);
+            return fail("task sleep timeout");
+        }
+
+        task_yield();
+        if (sleeper.state != TASK_ZOMBIE)
+        {
+            __asm__ volatile("wfi" ::: "memory");
+        }
+    }
+
+    if (task_sleep_after != 1)
+    {
+        task_system_reset();
+        phys_free_pages(stack, TASK_SELFTEST_STACK_PAGES);
+        return fail("task sleep wake counter");
+    }
+
+    task_system_reset();
+    phys_free_pages(stack, TASK_SELFTEST_STACK_PAGES);
+
+    printk("Selftest task sleep done\r\n");
+    return 1;
+}
+
+static void task_preempt_tick(struct timer_event *event, void *context)
+{
+    (void)event;
+    (void)context;
+
+    sched_request_reschedule();
+}
+
+static void task_preempt_entry(void *arg)
+{
+    volatile uint64_t *counter = (volatile uint64_t *)arg;
+
+    while (*counter < TASK_PREEMPT_TARGET)
+    {
+        (*counter)++;
+        cpu_relax();
+    }
+
+    /*
+     * 这个测试验证 timer 驱动的抢占切换，所以 task 达到目标后不能主动 yield 或返回。
+     * 它留在 wfi 里，等待后续 timer interrupt 把 CPU 切给其它 task 或 selftest 主线。
+     */
+    for (;;)
+    {
+        __asm__ volatile("wfi" ::: "memory");
+    }
+}
+
+static int test_task_preemption(void)
+{
+    printk("Selftest task preemption start\r\n");
+
+    struct task boot_task;
+    struct task task_a;
+    struct task task_b;
+    struct timer_event tick;
+    void *stack_a = phys_alloc_pages(TASK_SELFTEST_STACK_PAGES);
+    void *stack_b = phys_alloc_pages(TASK_SELFTEST_STACK_PAGES);
+    if (!stack_a || !stack_b)
+    {
+        if (stack_a)
+        {
+            phys_free_pages(stack_a, TASK_SELFTEST_STACK_PAGES);
+        }
+        if (stack_b)
+        {
+            phys_free_pages(stack_b, TASK_SELFTEST_STACK_PAGES);
+        }
+        return fail("task preempt stack allocation");
+    }
+
+    task_preempt_a_runs = 0;
+    task_preempt_b_runs = 0;
+    timer_event_init(&tick, task_preempt_tick, 0);
+    task_system_init(&boot_task, "selftest-preempt-main");
+    if (!task_create(&task_a, "preempt-a", stack_a,
+                     TASK_SELFTEST_STACK_PAGES * VM_PAGE_SIZE,
+                     task_preempt_entry, (void *)&task_preempt_a_runs))
+    {
+        task_system_reset();
+        phys_free_pages(stack_a, TASK_SELFTEST_STACK_PAGES);
+        phys_free_pages(stack_b, TASK_SELFTEST_STACK_PAGES);
+        return fail("task preempt create a");
+    }
+    if (!task_create(&task_b, "preempt-b", stack_b,
+                     TASK_SELFTEST_STACK_PAGES * VM_PAGE_SIZE,
+                     task_preempt_entry, (void *)&task_preempt_b_runs))
+    {
+        task_system_reset();
+        phys_free_pages(stack_a, TASK_SELFTEST_STACK_PAGES);
+        phys_free_pages(stack_b, TASK_SELFTEST_STACK_PAGES);
+        return fail("task preempt create b");
+    }
+
+    if (!timer_schedule_ms(&tick, 1, 1))
+    {
+        task_system_reset();
+        phys_free_pages(stack_a, TASK_SELFTEST_STACK_PAGES);
+        phys_free_pages(stack_b, TASK_SELFTEST_STACK_PAGES);
+        return fail("task preempt timer schedule");
+    }
+
+    uint64_t timeout_cycles = timer_ms_to_cycles(TASK_PREEMPT_TIMEOUT_MS);
+    uint64_t start = sbi_get_time();
+    while (task_preempt_a_runs < TASK_PREEMPT_TARGET ||
+           task_preempt_b_runs < TASK_PREEMPT_TARGET)
+    {
+        if (sbi_get_time() - start > timeout_cycles)
+        {
+            timer_cancel(&tick);
+            task_system_reset();
+            phys_free_pages(stack_a, TASK_SELFTEST_STACK_PAGES);
+            phys_free_pages(stack_b, TASK_SELFTEST_STACK_PAGES);
+            return fail("task preempt timeout");
+        }
+        __asm__ volatile("wfi" ::: "memory");
+    }
+
+    timer_cancel(&tick);
+    task_system_reset();
+    phys_free_pages(stack_a, TASK_SELFTEST_STACK_PAGES);
+    phys_free_pages(stack_b, TASK_SELFTEST_STACK_PAGES);
+
+    printk("Selftest task preemption done\r\n");
     return 1;
 }
 
@@ -445,6 +728,18 @@ int kernel_selftest_run(void)
         return 0;
     }
     if (!test_timer())
+    {
+        return 0;
+    }
+    if (!test_task_switch())
+    {
+        return 0;
+    }
+    if (!test_task_sleep())
+    {
+        return 0;
+    }
+    if (!test_task_preemption())
     {
         return 0;
     }

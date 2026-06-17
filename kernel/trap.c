@@ -1,10 +1,10 @@
 #include "trap.h"
 
-#include <stddef.h>
-
+#include "compile_check.h"
 #include "csr.h"
 #include "early_log.h"
 #include "printk.h"
+#include "sched.h"
 #include "trap_frame_offsets.h"
 #include "timer.h"
 
@@ -27,54 +27,55 @@
 
 extern void trap_vector(void);
 
+enum trap_result
+{
+    TRAP_HANDLED,
+    TRAP_FATAL,
+};
+
 struct trap_outcome
 {
     enum trap_result result;
     const char *reason;
 };
 
-#define CHECK_TRAP_FRAME_OFFSET(field, offset) \
-    _Static_assert(offsetof(struct trap_frame, field) == (offset), \
-                   "trap_frame offset mismatch: " #field)
-
-CHECK_TRAP_FRAME_OFFSET(ra, TRAP_FRAME_RA);
-CHECK_TRAP_FRAME_OFFSET(sp, TRAP_FRAME_SP);
-CHECK_TRAP_FRAME_OFFSET(gp, TRAP_FRAME_GP);
-CHECK_TRAP_FRAME_OFFSET(tp, TRAP_FRAME_TP);
-CHECK_TRAP_FRAME_OFFSET(t0, TRAP_FRAME_T0);
-CHECK_TRAP_FRAME_OFFSET(t1, TRAP_FRAME_T1);
-CHECK_TRAP_FRAME_OFFSET(t2, TRAP_FRAME_T2);
-CHECK_TRAP_FRAME_OFFSET(s0, TRAP_FRAME_S0);
-CHECK_TRAP_FRAME_OFFSET(s1, TRAP_FRAME_S1);
-CHECK_TRAP_FRAME_OFFSET(a0, TRAP_FRAME_A0);
-CHECK_TRAP_FRAME_OFFSET(a1, TRAP_FRAME_A1);
-CHECK_TRAP_FRAME_OFFSET(a2, TRAP_FRAME_A2);
-CHECK_TRAP_FRAME_OFFSET(a3, TRAP_FRAME_A3);
-CHECK_TRAP_FRAME_OFFSET(a4, TRAP_FRAME_A4);
-CHECK_TRAP_FRAME_OFFSET(a5, TRAP_FRAME_A5);
-CHECK_TRAP_FRAME_OFFSET(a6, TRAP_FRAME_A6);
-CHECK_TRAP_FRAME_OFFSET(a7, TRAP_FRAME_A7);
-CHECK_TRAP_FRAME_OFFSET(s2, TRAP_FRAME_S2);
-CHECK_TRAP_FRAME_OFFSET(s3, TRAP_FRAME_S3);
-CHECK_TRAP_FRAME_OFFSET(s4, TRAP_FRAME_S4);
-CHECK_TRAP_FRAME_OFFSET(s5, TRAP_FRAME_S5);
-CHECK_TRAP_FRAME_OFFSET(s6, TRAP_FRAME_S6);
-CHECK_TRAP_FRAME_OFFSET(s7, TRAP_FRAME_S7);
-CHECK_TRAP_FRAME_OFFSET(s8, TRAP_FRAME_S8);
-CHECK_TRAP_FRAME_OFFSET(s9, TRAP_FRAME_S9);
-CHECK_TRAP_FRAME_OFFSET(s10, TRAP_FRAME_S10);
-CHECK_TRAP_FRAME_OFFSET(s11, TRAP_FRAME_S11);
-CHECK_TRAP_FRAME_OFFSET(t3, TRAP_FRAME_T3);
-CHECK_TRAP_FRAME_OFFSET(t4, TRAP_FRAME_T4);
-CHECK_TRAP_FRAME_OFFSET(t5, TRAP_FRAME_T5);
-CHECK_TRAP_FRAME_OFFSET(t6, TRAP_FRAME_T6);
-CHECK_TRAP_FRAME_OFFSET(sepc, TRAP_FRAME_SEPC);
-CHECK_TRAP_FRAME_OFFSET(sstatus, TRAP_FRAME_SSTATUS);
-CHECK_TRAP_FRAME_OFFSET(scause, TRAP_FRAME_SCAUSE);
-CHECK_TRAP_FRAME_OFFSET(stval, TRAP_FRAME_STVAL);
-CHECK_TRAP_FRAME_OFFSET(reserved, TRAP_FRAME_RESERVED);
-_Static_assert(sizeof(struct trap_frame) == TRAP_FRAME_SIZE,
-               "trap_frame size mismatch");
+CHECK_STRUCT_OFFSET(struct trap_frame, ra, TRAP_FRAME_RA);
+CHECK_STRUCT_OFFSET(struct trap_frame, sp, TRAP_FRAME_SP);
+CHECK_STRUCT_OFFSET(struct trap_frame, gp, TRAP_FRAME_GP);
+CHECK_STRUCT_OFFSET(struct trap_frame, tp, TRAP_FRAME_TP);
+CHECK_STRUCT_OFFSET(struct trap_frame, t0, TRAP_FRAME_T0);
+CHECK_STRUCT_OFFSET(struct trap_frame, t1, TRAP_FRAME_T1);
+CHECK_STRUCT_OFFSET(struct trap_frame, t2, TRAP_FRAME_T2);
+CHECK_STRUCT_OFFSET(struct trap_frame, s0, TRAP_FRAME_S0);
+CHECK_STRUCT_OFFSET(struct trap_frame, s1, TRAP_FRAME_S1);
+CHECK_STRUCT_OFFSET(struct trap_frame, a0, TRAP_FRAME_A0);
+CHECK_STRUCT_OFFSET(struct trap_frame, a1, TRAP_FRAME_A1);
+CHECK_STRUCT_OFFSET(struct trap_frame, a2, TRAP_FRAME_A2);
+CHECK_STRUCT_OFFSET(struct trap_frame, a3, TRAP_FRAME_A3);
+CHECK_STRUCT_OFFSET(struct trap_frame, a4, TRAP_FRAME_A4);
+CHECK_STRUCT_OFFSET(struct trap_frame, a5, TRAP_FRAME_A5);
+CHECK_STRUCT_OFFSET(struct trap_frame, a6, TRAP_FRAME_A6);
+CHECK_STRUCT_OFFSET(struct trap_frame, a7, TRAP_FRAME_A7);
+CHECK_STRUCT_OFFSET(struct trap_frame, s2, TRAP_FRAME_S2);
+CHECK_STRUCT_OFFSET(struct trap_frame, s3, TRAP_FRAME_S3);
+CHECK_STRUCT_OFFSET(struct trap_frame, s4, TRAP_FRAME_S4);
+CHECK_STRUCT_OFFSET(struct trap_frame, s5, TRAP_FRAME_S5);
+CHECK_STRUCT_OFFSET(struct trap_frame, s6, TRAP_FRAME_S6);
+CHECK_STRUCT_OFFSET(struct trap_frame, s7, TRAP_FRAME_S7);
+CHECK_STRUCT_OFFSET(struct trap_frame, s8, TRAP_FRAME_S8);
+CHECK_STRUCT_OFFSET(struct trap_frame, s9, TRAP_FRAME_S9);
+CHECK_STRUCT_OFFSET(struct trap_frame, s10, TRAP_FRAME_S10);
+CHECK_STRUCT_OFFSET(struct trap_frame, s11, TRAP_FRAME_S11);
+CHECK_STRUCT_OFFSET(struct trap_frame, t3, TRAP_FRAME_T3);
+CHECK_STRUCT_OFFSET(struct trap_frame, t4, TRAP_FRAME_T4);
+CHECK_STRUCT_OFFSET(struct trap_frame, t5, TRAP_FRAME_T5);
+CHECK_STRUCT_OFFSET(struct trap_frame, t6, TRAP_FRAME_T6);
+CHECK_STRUCT_OFFSET(struct trap_frame, sepc, TRAP_FRAME_SEPC);
+CHECK_STRUCT_OFFSET(struct trap_frame, sstatus, TRAP_FRAME_SSTATUS);
+CHECK_STRUCT_OFFSET(struct trap_frame, scause, TRAP_FRAME_SCAUSE);
+CHECK_STRUCT_OFFSET(struct trap_frame, stval, TRAP_FRAME_STVAL);
+CHECK_STRUCT_OFFSET(struct trap_frame, reserved, TRAP_FRAME_RESERVED);
+CHECK_STRUCT_SIZE(struct trap_frame, TRAP_FRAME_SIZE);
 _Static_assert((TRAP_FRAME_SIZE % 16) == 0,
                "trap_frame size must preserve stack alignment");
 
@@ -178,7 +179,7 @@ static struct trap_outcome handle_exception(struct trap_frame *frame,
     }
 }
 
-enum trap_result trap_handle(struct trap_frame *frame)
+struct trap_frame *trap_handle(struct trap_frame *frame)
 {
     uint64_t code = frame->scause & SCAUSE_CODE_MASK;
     struct trap_outcome outcome;
@@ -193,5 +194,5 @@ enum trap_result trap_handle(struct trap_frame *frame)
         trap_stop(outcome.reason, frame);
     }
 
-    return outcome.result;
+    return sched_from_trap(frame);
 }

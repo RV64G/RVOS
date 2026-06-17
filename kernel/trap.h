@@ -42,12 +42,7 @@ struct trap_frame {
     uint64_t reserved;
 };
 
-enum trap_result {
-    TRAP_HANDLED,
-    TRAP_FATAL,
-};
-
 void trap_init(void);
-enum trap_result trap_handle(struct trap_frame *frame);
+struct trap_frame *trap_handle(struct trap_frame *frame);
 
 #endif

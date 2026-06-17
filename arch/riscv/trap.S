@@ -55,10 +55,12 @@ trap_vector:
 
     mv a0, sp
     call trap_handle
+    mv sp, a0
 
     /*
-     * trap_handle() 的返回值放在 a0。当前汇编返回路径不根据它分支；fatal trap 会在
-     * C 侧停机，handled trap 才会回到这里。随后恢复原始 a0，保证被中断现场不变。
+     * trap_handle() 返回要恢复的 trap_frame 地址。没有发生调度时就是原来的 sp；
+     * 如果 timer interrupt 触发了调度，这里会切到下一个 task 的 trap_frame。
+     * fatal trap 会在 C 侧停机，不会回到这条恢复路径。
      */
     ld t0, TRAP_FRAME_SEPC(sp)
     csrw sepc, t0

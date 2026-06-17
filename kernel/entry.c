@@ -8,6 +8,7 @@
 #include "platform.h"
 #include "printk.h"
 #include "selftest.h"
+#include "task.h"
 #include "timer.h"
 #include "trap.h"
 
@@ -60,6 +61,8 @@ static void print_boot_info(const struct kernel_boot_info *boot_info)
     early_print_field("kernel_stack_phys", boot_info->kernel_stack_phys);
     early_print_field("kernel_stack_size", boot_info->kernel_stack_size);
 }
+
+static struct task boot_task;
 
 static int validate_boot_info(const struct kernel_boot_info *boot_info)
 {
@@ -145,6 +148,7 @@ void kernel_entry(struct kernel_boot_info *boot_info)
         goto HALT;
     printk_init();
     trap_init();
+    task_system_init(&boot_task, "boot");
     if (!timer_init())
         goto HALT;
 #ifdef KERNEL_SELFTEST
