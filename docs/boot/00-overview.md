@@ -45,3 +45,4 @@ kernel ELF 负责长期运行
 - [10 SBI Timer 与系统 Tick](10-sbi-timer.md)
 - [11 内核 Task 与上下文切换](11-kernel-task.md)
 - [12 IRQ 与串口输入](12-irq-console-input.md)
+- [13 Spinlock 与中断状态](13-spinlock.md)

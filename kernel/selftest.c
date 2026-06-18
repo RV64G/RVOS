@@ -7,6 +7,7 @@
 #include "printk.h"
 #include "riscv/sbi.h"
 #include "sched.h"
+#include "spinlock.h"
 #include "task.h"
 #include "timer.h"
 #include "vm.h"
@@ -163,6 +164,40 @@ static int test_timer(void)
     }
 
     printk("Selftest timer done\r\n");
+    return 1;
+}
+
+static int test_spinlock(void)
+{
+    printk("Selftest spinlock start\r\n");
+
+    struct spinlock lock;
+    uint64_t protected_value = 0;
+
+    spinlock_init(&lock, "selftest");
+    if (spinlock_is_locked(&lock))
+    {
+        return fail("spinlock initial state");
+    }
+
+    spinlock_acquire(&lock);
+    if (!spinlock_is_locked(&lock))
+    {
+        return fail("spinlock acquire state");
+    }
+    protected_value = 0x5a5aULL;
+    spinlock_release(&lock);
+
+    if (spinlock_is_locked(&lock))
+    {
+        return fail("spinlock release state");
+    }
+    if (protected_value != 0x5a5aULL)
+    {
+        return fail("spinlock protected write");
+    }
+
+    printk("Selftest spinlock done\r\n");
     return 1;
 }
 
@@ -728,6 +763,10 @@ int kernel_selftest_run(void)
         return 0;
     }
     if (!test_timer())
+    {
+        return 0;
+    }
+    if (!test_spinlock())
     {
         return 0;
     }
