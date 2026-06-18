@@ -25,6 +25,7 @@
 - [09 Trap 入口与返回](boot/09-trap-entry.md)
 - [10 SBI Timer 与 Timer List](boot/10-sbi-timer.md)
 - [11 内核 Task 与上下文切换](boot/11-kernel-task.md)
+- [12 IRQ 与串口输入](boot/12-irq-console-input.md)
 
 ## 后续专题
 

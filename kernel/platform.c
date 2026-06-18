@@ -41,6 +41,7 @@ void platform_info_reset(uint64_t boot_hart_id)
     current_platform.uart_size = 0;
     current_platform.uart_reg_shift = 0;
     current_platform.uart_reg_io_width = 1;
+    current_platform.uart_irq = 0;
     current_platform.irq_base = 0;
     current_platform.irq_size = 0;
 }
@@ -72,6 +73,7 @@ void platform_info_print(void)
     early_print_field("uart_size", current_platform.uart_size);
     early_print_field("uart_reg_shift", current_platform.uart_reg_shift);
     early_print_field("uart_reg_io_width", current_platform.uart_reg_io_width);
+    early_print_field("uart_irq", current_platform.uart_irq);
     early_print_field("irq_base", current_platform.irq_base);
     early_print_field("irq_size", current_platform.irq_size);
 }

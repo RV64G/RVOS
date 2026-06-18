@@ -30,6 +30,25 @@ reserved ranges : kernel image、boot_info、最终 memory map、初始内核栈
 reserved ranges 不会进入页分配器。否则内核可能把正在执行的代码、启动参数、memory
 map 或当前栈重新分配出去。
 
+启动日志里的 reserved ranges 正是这四类材料：
+
+```text
+kernel_phys_base + kernel_size                 : kernel ELF 装载后的物理范围
+efi_memory_map_phys + efi_memory_map_size      : 最终 EFI memory map，按页向上取整
+boot_info_phys + boot_info_size                : boot_info 自身所在页
+kernel_stack_phys + kernel_stack_size          : EFI loader 为内核准备的初始栈
+```
+
+它们不一定紧挨着，因为这些页是在 EFI 阶段分别申请或装载出来的。内核只按
+`boot_info` 记录的实际地址保留它们，不要求它们处在同一片连续空间。
+
+usable ranges 也可能断开。原因是 EFI memory map 里的物理内存本来就按类型分段：
+只有 `EfiConventionalMemory` 会进入 usable；DTB、固件运行时内存、Boot Services
+残留内存、MMIO 空洞或其它固件保留区都不会出现在 usable 里。如果日志里看到两段
+usable 中间断开，不是“被页分配器切坏了”，而是 EFI memory map 没有把中间那段标成
+conventional memory。当前策略宁可保守跳过，也不把固件未明确交给内核的区域当成
+空闲页。
+
 ## 为什么 descriptor_size 必须保存
 
 UEFI memory descriptor 未来可以扩展。内核遍历 memory map 时不能写死
@@ -68,15 +87,8 @@ metadata 本身也放在物理内存里。初始化顺序是：
 ```
 
 metadata 不放在内核镜像的固定数组里。因此物理内存变大时，页管理元数据也可以随之
-变大。最近 QEMU 日志里可以看到：
-
-```text
-metadata_phys=0x0000000080060000
-metadata_pages=0x000000000000010e
-```
-
-也就是页管理元数据用了 `0x10e` 个 4KB 页。这已经超过“小固定数组”的规模，但仍然
-安全，因为它来自 EFI memory map 中的 usable memory。
+变大。启动日志会打印 `metadata_phys` 和 `metadata_pages`，用于确认元数据从 usable
+memory 中预留，而不是写死在某个固定地址或固定大小数组里。
 
 ## 空洞和 PFN 覆盖范围
 

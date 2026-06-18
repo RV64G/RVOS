@@ -43,3 +43,5 @@ kernel ELF 负责长期运行
 - [08 平台 MMIO 与 UART 输出](08-platform-init.md)
 - [09 Trap 入口与返回](09-trap-entry.md)
 - [10 SBI Timer 与系统 Tick](10-sbi-timer.md)
+- [11 内核 Task 与上下文切换](11-kernel-task.md)
+- [12 IRQ 与串口输入](12-irq-console-input.md)

@@ -2,13 +2,19 @@
 
 #include <stdint.h>
 
+#include "console.h"
+
 /*
  * QEMU virt 和当前开发板 DTB 中暴露的是 ns16550 兼容 UART。这里先只实现最小发送
  * 路径：等待 LSR.THRE 置位后写 THR。波特率、FIFO、中断模式暂时交给固件留下的
  * 默认状态；等驱动层成形后再补完整初始化。
  */
+#define UART_RBR 0U
 #define UART_THR 0U
+#define UART_IER 1U
 #define UART_LSR 5U
+#define UART_IER_RDI (1U << 0)
+#define UART_LSR_DR (1U << 0)
 #define UART_LSR_THRE (1U << 5)
 
 typedef uint32_t (*uart_read_fn)(uintptr_t addr);
@@ -112,7 +118,7 @@ int uart_console_init(uint64_t base, uint64_t size, uint32_t reg_shift,
     }
 
     uint64_t lsr_offset = (uint64_t)UART_LSR << reg_shift;
-    if (size <= lsr_offset || uart_access_width > size - lsr_offset) {
+    if (size <= lsr_offset || reg_io_width > size - lsr_offset) {
         return 0;
     }
 
@@ -143,4 +149,35 @@ void uart_putchar(int ch)
     }
 
     uart_write(UART_THR, (uint8_t)ch);
+}
+
+void uart_enable_rx_interrupt(void)
+{
+    if (!uart_ready()) {
+        return;
+    }
+
+    /*
+     * IER.RDI 打开“接收数据可用”中断。之后每当 RBR/FIFO 里出现输入字符，
+     * UART 会向 PLIC 拉起自己的 interrupt source。
+     *
+     * 这里只打开 RX，不打开 THR empty 等发送中断；输出路径仍然保持最简单的轮询。
+     */
+    uint32_t ier = uart_read(UART_IER);
+    uart_write(UART_IER, (uint8_t)(ier | UART_IER_RDI));
+}
+
+void uart_handle_interrupt(void)
+{
+    if (!uart_ready()) {
+        return;
+    }
+
+    /*
+     * 一次 UART interrupt 可能代表 FIFO 里已经有多个字符。这里把当前已经到达的字符
+     * 读空，但不回显、不 printk，避免硬中断路径等待 UART 发送寄存器。
+     */
+    while ((uart_read(UART_LSR) & UART_LSR_DR) != 0) {
+        console_input_putc((int)(uart_read(UART_RBR) & 0xffU));
+    }
 }

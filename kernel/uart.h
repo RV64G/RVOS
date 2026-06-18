@@ -24,4 +24,16 @@ int uart_ready(void);
  */
 void uart_putchar(int ch);
 
+/**
+ * 开启 ns16550 接收中断。
+ */
+void uart_enable_rx_interrupt(void);
+
+/**
+ * 处理 UART 中断。
+ *
+ * 当前只关心 RX：把已经到达的字符读入 console input buffer。
+ */
+void uart_handle_interrupt(void);
+
 #endif

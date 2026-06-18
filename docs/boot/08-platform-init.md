@@ -30,7 +30,7 @@ kernel_entry()
 - EFI conventional memory 中整理出的可用物理内存。
 
 UART 和 PLIC 属于设备 MMIO，不属于 EFI conventional memory。如果直接在开启 MMU 后
-访问 `0x10000000` 这样的 UART 地址，页表里没有对应 PTE，就会触发访问异常。当前
+访问 DTB 中记录的 UART/PLIC MMIO 地址，页表里没有对应 PTE，就会触发访问异常。当前
 trap 还没正式接管，所以表现通常是没有后续输出或直接卡住。
 
 因此顺序必须是：
@@ -52,13 +52,24 @@ trap 还没正式接管，所以表现通常是没有后续输出或直接卡住
 
 ## 当前 UART 实现范围
 
-当前 UART 驱动只实现 ns16550 兼容设备的最小发送路径：
+当前 UART 驱动已经覆盖 ns16550 兼容设备的最小收发路径。
+
+输出路径：
 
 - 等待 `LSR.THRE` 表示发送保持寄存器为空；
 - 写 `THR` 输出一个字符；
-- 不重新配置波特率；
-- 不开启 UART 中断；
-- 不处理输入。
 
-这足够让内核在 QEMU 和当前开发板启动阶段接管日志输出。完整串口驱动后续可以继续
-扩展 FIFO、中断输入和控制台抽象。
+输入路径：
+
+- 通过 `IER.RDI` 打开 UART 接收中断；
+- 外部中断经 PLIC 进入统一 trap；
+- `uart_handle_interrupt()` 读取 `RBR`，把字符放进 console input buffer。
+
+它仍然不是完整串口驱动：
+
+- 不重新配置波特率；
+- 不配置 FIFO 触发水位；
+- 不实现 tty 行规程、阻塞 read 或信号；
+- 不处理发送中断，输出仍然轮询。
+
+串口输入链路见 [12 IRQ 与串口输入](12-irq-console-input.md)。

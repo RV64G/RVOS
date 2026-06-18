@@ -25,11 +25,45 @@ trap_vector
 
 ## timebase_frequency
 
-`timebase_frequency` 来自 DTB，表示 `rdtime` 每秒增长多少次。QEMU virt 常见值是
-`10000000`，也就是 10MHz。
+`timebase_frequency` 来自 DTB，表示 `rdtime` 每秒增长多少次。它是平台数据，不能
+在内核里写死。
 
-timer list 会把上层传入的毫秒值换算成 `rdtime` cycles。比如 timebase 是 10MHz 时，
-1000ms 就是 10,000,000 cycles。
+timer list 会根据这个频率把上层传入的毫秒值换算成 `rdtime` cycles。
+
+## Timer 和 PLIC 的区别
+
+SBI timer 不走 PLIC。PLIC 负责的是外部设备中断，比如 UART、网卡、块设备；timer
+interrupt 是 hart 自己的 supervisor timer interrupt。
+
+因此 timer 不需要这些步骤：
+
+```text
+priority[source]
+enable[context][source]
+claim()
+complete()
+```
+
+timer 初始化只需要两层开关：
+
+```text
+sbi_set_timer(deadline) : 通过 SBI 请求下一次 timer interrupt 的 rdtime deadline
+sie.STIE                : 允许当前 hart 接收 supervisor timer interrupt
+sstatus.SIE             : 打开当前 hart 的 S-mode 全局中断
+```
+
+timer interrupt 到来后，`scause` 直接告诉 trap 层“这是 supervisor timer interrupt”，
+所以 `handle_interrupt()` 可以直接调用 `timer_handle_interrupt()`。它不需要像 PLIC
+那样先 claim 一个 source id，因为 timer interrupt 的来源就是当前 hart 的 timer。
+
+多核时 timer 仍然需要按 hart 初始化，但原因和 PLIC 不一样：
+
+- 每个会运行调度器的 hart 都要有自己的 timer deadline。
+- 每个 hart 都要打开自己的 `sie.STIE`。
+- 每个 hart 的 timer interrupt 只驱动本 hart 上的调度或 timer list 处理。
+
+如果后续只让 boot hart 跑内核，其它 hart park 在 `wfi`，那就只需要 boot hart 初始化
+timer。等真正做 SMP 调度时，再给每个在线 hart 建立各自的 timer/scheduler 状态。
 
 ## 外部 timer
 

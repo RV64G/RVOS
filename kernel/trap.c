@@ -3,6 +3,7 @@
 #include "compile_check.h"
 #include "csr.h"
 #include "early_log.h"
+#include "irq.h"
 #include "printk.h"
 #include "sched.h"
 #include "trap_frame_offsets.h"
@@ -135,7 +136,8 @@ static struct trap_outcome handle_interrupt(struct trap_frame *frame,
         timer_handle_interrupt();
         return trap_handled();
     case SCAUSE_SUPERVISOR_EXTERNAL_INTERRUPT:
-        return trap_fatal("Supervisor external interrupt");
+        irq_handle_external();
+        return trap_handled();
     default:
         printk_field("interrupt_code", code);
         return trap_fatal("Unknown interrupt");

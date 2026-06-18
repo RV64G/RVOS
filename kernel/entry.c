@@ -1,7 +1,9 @@
 #include "boot_memory.h"
+#include "console.h"
 #include "dtb.h"
 #include "early_log.h"
 #include "early_vm.h"
+#include "irq.h"
 #include "kernel_boot_info.h"
 #include "kmalloc.h"
 #include "page_alloc.h"
@@ -147,15 +149,19 @@ void kernel_entry(struct kernel_boot_info *boot_info)
     if (!platform_map_mmio())
         goto HALT;
     printk_init();
+    console_init();
     trap_init();
     task_system_init(&boot_task, "boot");
     if (!timer_init())
+        goto HALT;
+    if (!irq_init())
         goto HALT;
 #ifdef KERNEL_SELFTEST
     if (!kernel_selftest_run())
         goto HALT;
     printk("Kernel selftest passed\r\n");
 #endif
+    console_debug_loop();
 HALT:
     early_halt_forever();
 }

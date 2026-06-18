@@ -43,6 +43,7 @@ struct fdt_node_state {
     uint64_t reg_size;
     uint32_t uart_reg_shift;
     uint32_t uart_reg_io_width;
+    uint32_t uart_irq;
     int has_reg;
     int is_uart;
     int is_interrupt_controller;
@@ -144,6 +145,7 @@ static void save_reg_if_needed(const struct fdt_node_state *node)
         platform->uart_size = node->reg_size;
         platform->uart_reg_shift = node->uart_reg_shift;
         platform->uart_reg_io_width = node->uart_reg_io_width;
+        platform->uart_irq = node->uart_irq;
     }
 
     if (node->is_interrupt_controller && platform->irq_base == 0) {
@@ -214,6 +216,16 @@ static void parse_property(
 
     if (str_eq(prop_name, "timebase-frequency") && len >= sizeof(uint32_t)) {
         platform->timebase_frequency = be32_read(value);
+        return;
+    }
+
+    /*
+     * 这里读取 UART 节点的 PLIC source id。QEMU virt 和当前板子的 ns16550
+     * 节点通常使用 interrupts = <N>，第一个 cell 就是外部中断号。
+     * interrupts-extended 需要结合 phandle 和 #interrupt-cells 解析，后续再扩展。
+     */
+    if (str_eq(prop_name, "interrupts") && len >= sizeof(uint32_t)) {
+        node->uart_irq = be32_read(value);
         return;
     }
 
@@ -309,6 +321,7 @@ static int parse_structure_block(
             stack[depth].reg_size = 0;
             stack[depth].uart_reg_shift = 0;
             stack[depth].uart_reg_io_width = 1;
+            stack[depth].uart_irq = 0;
             stack[depth].has_reg = 0;
             stack[depth].is_uart = 0;
             stack[depth].is_interrupt_controller = 0;
