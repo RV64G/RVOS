@@ -38,16 +38,6 @@ static int plic_range_valid(uint64_t offset)
     return plic_base != 0 && offset <= plic_size && sizeof(uint32_t) <= plic_size - offset;
 }
 
-static uint64_t plic_s_context(uint64_t hart_id)
-{
-    /*
-     * 常见 RISC-V PLIC context 排列是：
-     *   hart0 M-mode, hart0 S-mode, hart1 M-mode, hart1 S-mode, ...
-     * OpenSBI 已经占住 M-mode，内核在 S-mode 下使用 2 * hart + 1。
-     */
-    return hart_id * 2ULL + 1ULL;
-}
-
 static int plic_write(uint64_t offset, uint32_t value)
 {
     if (!plic_range_valid(offset))
@@ -120,16 +110,17 @@ int irq_init(void)
 {
     const struct platform_info *platform = platform_info();
 
-    if (platform->irq_base == 0 || platform->irq_size == 0 || platform->uart_irq == 0)
+    if (platform->irq_base == 0 || platform->irq_size == 0 ||
+        platform->uart_irq == 0 || !platform->has_irq_context)
     {
-        printk("IRQ init failed: missing PLIC or UART irq\r\n");
+        printk("IRQ init failed: missing PLIC, UART irq or context\r\n");
         return 0;
     }
 
     plic_base = (volatile uint8_t *)(uintptr_t)platform->irq_base;
     plic_size = platform->irq_size;
     uart_irq = platform->uart_irq;
-    plic_context = plic_s_context(platform->boot_hart_id);
+    plic_context = platform->irq_context;
 
     uint64_t priority_offset = PLIC_PRIORITY_BASE + (uint64_t)uart_irq * sizeof(uint32_t);
     uint64_t threshold_offset =

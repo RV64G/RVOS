@@ -41,6 +41,7 @@ DTB 负责告诉内核两类“板级事实”：
 ```text
 PLIC base/size      : PLIC MMIO 窗口在物理地址空间的位置
 UART interrupt id   : UART 对应的 PLIC interrupt source id
+PLIC context        : 当前 boot hart 的 S-mode external interrupt context
 ```
 
 PLIC 窗口内部的寄存器偏移不是 DTB 数据，而是 PLIC 兼容布局的一部分。代码会访问
@@ -127,17 +128,40 @@ claim/complete : 读是 claim，写是 complete
 所以 `irq_handle_external()` 先 claim 得到一个 source id，再按 source id 分发到
 UART 或其它设备，最后 complete 同一个 source id。
 
-## context 为什么是 `2 * hart + 1`
+## PLIC context 从哪里来
 
-常见 PLIC context 排列是：
+有些资料会把 PLIC context 简化成：
 
 ```text
 hart0 M-mode, hart0 S-mode, hart1 M-mode, hart1 S-mode, ...
 ```
 
-RVOS 运行在 OpenSBI 交给我们的 S-mode，所以当前 hart 的 S-mode context 是
-`2 * hart_id + 1`。后续如果遇到 AIA 或不同 PLIC context 排列，需要从 DTB/平台代码里
-扩展表达，不应该把所有平台都假定成这一种。
+然后推导出 `2 * hart_id + 1`。这个公式不可靠。真实平台应该读取 PLIC 节点的
+`interrupts-extended`：
+
+```text
+interrupts-extended = <cpu-intc-phandle interrupt-id> ...
+```
+
+每一对 cell 对应一个 PLIC context，pair 在列表里的序号就是 context number。RISC-V
+cpu-intc 中：
+
+```text
+interrupt-id 11 : M-mode external interrupt
+interrupt-id 9  : S-mode external interrupt
+```
+
+因此内核的做法是：
+
+```text
+1. 根据 boot_hart_id 找到 /cpus/cpu@N/interrupt-controller 的 phandle。
+2. 遍历 PLIC interrupts-extended。
+3. 找到 phandle 相同且 interrupt-id == 9 的 pair。
+4. 这个 pair 的序号就是当前 boot hart 的 S-mode PLIC context。
+```
+
+这样 QEMU、VisionFive V2、Milk-V Mars 或其它 RISC-V 板子只要 DTB 正确，就不需要在
+代码里写死 context 排列。
 
 ## irq_init() 为什么需要这些数据
 
@@ -153,18 +177,18 @@ const struct platform_info *platform = platform_info();
 ```text
 irq_base / irq_size      : PLIC MMIO 窗口，用来访问 PLIC 寄存器
 uart_irq                 : UART 对应的 PLIC source id
-boot_hart_id             : 当前运行内核初始化代码的 hart
+irq_context              : 当前 boot hart 的 S-mode PLIC context
 ```
 
 这几个值缺一不可。没有 PLIC range，就不知道中断控制器寄存器在哪里；没有 UART
-source id，就不知道应该 enable 哪个中断源；没有 boot hart id，就不知道应该配置哪个
-PLIC context。
+source id，就不知道应该 enable 哪个中断源；没有 irq_context，就不知道应该配置哪个
+PLIC context 的 enable/threshold/claim 寄存器。
 
 ```text
 plic_base = platform->irq_base
 plic_size = platform->irq_size
 uart_irq = platform->uart_irq
-plic_context = plic_s_context(platform->boot_hart_id)
+plic_context = platform->irq_context
 ```
 
 这些全局变量保存的是“当前内核已选择的 IRQ 控制路径”：
@@ -184,10 +208,9 @@ plic_context  : 当前 boot hart 的 S-mode PLIC context
 可以把 UART 接到不同 PLIC source；内核应该相信 DTB，而不是把某个平台的编号写进
 驱动主逻辑。
 
-`plic_context` 现在由 `boot_hart_id` 推导出来。它表达的是“这个 hart 的 S-mode
-中断入口”。后面做多核时，每个 hart 都需要配置自己的 context；如果要把 UART 输入
-迁到另一个 hart，本质上就是给那个 hart 的 context enable UART source，并让对应 hart
-安装 trap/栈/调度状态。
+`plic_context` 表达的是“这个 hart 的 S-mode 中断入口”。后面做多核时，每个 hart 都
+需要从 DTB 找到自己的 context；如果要把 UART 输入迁到另一个 hart，本质上就是给那个
+hart 的 context enable UART source，并让对应 hart 安装 trap/栈/调度状态。
 
 ```text
 priority_offset = priority array + uart_irq

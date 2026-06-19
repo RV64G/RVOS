@@ -2,6 +2,7 @@
 
 EFI_BUILD_DIR := $(BUILD_DIR)/efi
 EFI_APP_NAME  := boot
+EFI_SKIP_EXIT_BOOT_SERVICES ?= 0
 EFI_APP_SRCS  := $(wildcard boot/efi/$(EFI_APP_NAME)/*.c)
 EFI_APP_ASMS  := $(wildcard boot/efi/$(EFI_APP_NAME)/*.S)
 EFI_RISCV_SRCS := $(wildcard boot/efi/riscv/*.c)
@@ -27,6 +28,7 @@ EFI_CFLAGS = \
 	-fPIC \
 	-Iboot/efi/include \
 	-Iinclude \
+	-DEFI_SKIP_EXIT_BOOT_SERVICES=$(EFI_SKIP_EXIT_BOOT_SERVICES) \
 	-mno-relax \
 	-g
 

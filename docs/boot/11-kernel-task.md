@@ -51,12 +51,13 @@ timer interrupt
 
 ```text
 task.c
-  -> 初始化 task 对象、内核栈、初始 context、初始 trap_frame。
+  -> 初始化 task 对象、内核栈、初始 context、初始 trap_frame、地址空间指针。
 
 sched.c
   -> 维护 run queue。
   -> 选择下一个 READY task。
   -> 提供 yield 路径和 trap 返回路径两个调度入口。
+  -> 在切换 task 时，如果地址空间不同，切换 satp。
 ```
 
 `struct task` 内嵌 `struct list_head run_node`。run queue 不额外分配链表节点，只把
@@ -109,6 +110,28 @@ return next->trap_frame 给 trap.S
 
 这让一个新 task 第一次也可以通过 trap 返回路径启动。
 
+## task 与地址空间
+
+`struct task` 现在带有一个 `vm_space` 指针。当前阶段所有 task 仍然使用同一张
+`kernel_vm_space()`：
+
+```text
+boot task      -> kernel_vm_space()
+普通内核 task -> 默认继承创建者的 vm_space
+```
+
+这一步只是把 PCB 和 VM 的边界接起来，还没有创建独立用户页表。scheduler 在
+`sched_yield()` 和 `sched_from_trap()` 两条路径上都会检查新旧 task 的 `vm_space`：
+
+```text
+如果 vm_space 相同：只切换寄存器/状态，不动 satp。
+如果 vm_space 不同：先 vm_activate_sv39(next->vm_space)，再恢复目标 task。
+```
+
+后续真正接入用户地址空间时，每个用户页表必须保留内核代码、内核数据、内核栈和 trap
+入口所需映射。否则 scheduler 切到目标 `satp` 后，自己正在执行的内核代码或即将恢复的
+内核栈会立刻失效。
+
 ## task 不是完整进程
 
 第一版 `struct task` 只描述内核态执行流：
@@ -118,6 +141,7 @@ return next->trap_frame 给 trap.S
 - `struct context`；
 - kernel stack；
 - entry 函数和参数；
+- `vm_space`：当前执行流使用的地址空间；
 - `sleep_timer`：用于 `task_sleep_ms()` 的一次性唤醒事件；
 - `run_node`：挂入 scheduler run queue 的链表节点。
 

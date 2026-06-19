@@ -44,6 +44,14 @@ void vm_space_init(struct vm_space *space);
 int vm_space_create(struct vm_space *space);
 
 /**
+ * 把 src 中的 S-mode 映射复制到 dst。
+ *
+ * 这个接口用于创建用户地址空间的第一版骨架：用户页表需要能在 trap 后继续执行内核
+ * 代码、访问内核数据、MMIO 和 direct map，但不应该继承已有的 U-mode 映射。
+ */
+int vm_copy_kernel_mappings(struct vm_space *dst, const struct vm_space *src);
+
+/**
  * 把一段虚拟地址映射到一段物理地址。
  *
  * 当前基础接口建议按 4KB 页对齐使用。它只写页表，不分配被映射的物理页；调用者

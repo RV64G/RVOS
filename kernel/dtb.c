@@ -44,9 +44,11 @@ struct fdt_node_state {
     uint32_t uart_reg_shift;
     uint32_t uart_reg_io_width;
     uint32_t uart_irq;
+    uint32_t phandle;
     int has_reg;
     int is_uart;
     int is_interrupt_controller;
+    int is_cpu_intc;
 };
 
 static uint32_t be32_read(const void *ptr)
@@ -132,9 +134,17 @@ static int range_inside(uint64_t total_size, uint64_t offset, uint64_t size)
     return offset <= total_size && size <= total_size - offset;
 }
 
-static void save_reg_if_needed(const struct fdt_node_state *node)
+static uint32_t boot_cpu_intc_phandle;
+
+static void save_node_if_needed(const struct fdt_node_state *node,
+                                const struct fdt_node_state *parent)
 {
     struct platform_info *platform = platform_info_mut();
+
+    if (node->is_cpu_intc && parent && parent->has_reg &&
+        parent->reg_addr == platform->boot_hart_id && node->phandle != 0) {
+        boot_cpu_intc_phandle = node->phandle;
+    }
 
     if (!node->has_reg) {
         return;
@@ -151,6 +161,34 @@ static void save_reg_if_needed(const struct fdt_node_state *node)
     if (node->is_interrupt_controller && platform->irq_base == 0) {
         platform->irq_base = node->reg_addr;
         platform->irq_size = node->reg_size;
+    }
+}
+
+static void parse_plic_interrupts_extended(const void *value, uint32_t len)
+{
+    /*
+     * PLIC 的 interrupts-extended 是按 context 排列的 phandle/interrupt-id 列表。
+     * 对 RISC-V cpu-intc，interrupt id 9 表示 S-mode external interrupt，11 表示
+     * M-mode external interrupt。匹配 boot hart 的 cpu-intc phandle 和 irq 9 后，
+     * 当前 pair 的序号就是 PLIC context number。
+     */
+    if (boot_cpu_intc_phandle == 0 || (len % (2U * sizeof(uint32_t))) != 0) {
+        return;
+    }
+
+    const uint32_t *cells = (const uint32_t *)value;
+    uint32_t pairs = len / (2U * sizeof(uint32_t));
+    struct platform_info *platform = platform_info_mut();
+
+    for (uint32_t i = 0; i < pairs; i++) {
+        uint32_t phandle = be32_read(&cells[i * 2U]);
+        uint32_t interrupt_id = be32_read(&cells[i * 2U + 1U]);
+
+        if (phandle == boot_cpu_intc_phandle && interrupt_id == 9U) {
+            platform->irq_context = i;
+            platform->has_irq_context = 1;
+            return;
+        }
     }
 }
 
@@ -206,6 +244,9 @@ static void parse_property(
             compatible_has((const char *)value, len, "serial")) {
             node->is_uart = 1;
         }
+        if (compatible_has((const char *)value, len, "riscv,cpu-intc")) {
+            node->is_cpu_intc = 1;
+        }
         if (compatible_has((const char *)value, len, "plic") ||
             compatible_has((const char *)value, len, "aia") ||
             compatible_has((const char *)value, len, "interrupt-controller")) {
@@ -226,6 +267,11 @@ static void parse_property(
      */
     if (str_eq(prop_name, "interrupts") && len >= sizeof(uint32_t)) {
         node->uart_irq = be32_read(value);
+        return;
+    }
+
+    if (str_eq(prop_name, "interrupts-extended")) {
+        parse_plic_interrupts_extended(value, len);
         return;
     }
 
@@ -250,6 +296,12 @@ static void parse_property(
 
     if (str_eq(prop_name, "reg")) {
         parse_reg(node, value, len);
+        return;
+    }
+
+    if ((str_eq(prop_name, "phandle") || str_eq(prop_name, "linux,phandle")) &&
+        len >= sizeof(uint32_t)) {
+        node->phandle = be32_read(value);
     }
 }
 
@@ -322,9 +374,11 @@ static int parse_structure_block(
             stack[depth].uart_reg_shift = 0;
             stack[depth].uart_reg_io_width = 1;
             stack[depth].uart_irq = 0;
+            stack[depth].phandle = 0;
             stack[depth].has_reg = 0;
             stack[depth].is_uart = 0;
             stack[depth].is_interrupt_controller = 0;
+            stack[depth].is_cpu_intc = 0;
             continue;
         }
 
@@ -337,7 +391,10 @@ static int parse_structure_block(
              * 一个节点结束时，它的 compatible/reg 等属性都已经读完。此时才能判断
              * “这是 UART/PLIC 节点，而且已经拿到 MMIO range”，并写入 platform_info。
              */
-            save_reg_if_needed(&stack[depth]);
+            save_node_if_needed(
+                &stack[depth],
+                depth > 0 ? &stack[depth - 1] : 0
+            );
             depth--;
             continue;
         }
@@ -389,6 +446,7 @@ static int parse_structure_block(
 int dtb_init(const struct kernel_boot_info *boot_info)
 {
     platform_info_reset(boot_info->boot_hart_id);
+    boot_cpu_intc_phandle = 0;
 
     if ((boot_info->flags & KERNEL_BOOT_HAS_DTB) == 0 ||
         boot_info->dtb_phys == 0 ||

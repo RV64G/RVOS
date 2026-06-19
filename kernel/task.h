@@ -8,6 +8,7 @@
 #include "timer.h"
 
 struct trap_frame;
+struct vm_space;
 
 enum task_state
 {
@@ -31,6 +32,7 @@ struct task
     void *arg;
     const char *name;
     struct trap_frame *trap_frame;
+    struct vm_space *vm_space;
     struct timer_event sleep_timer;
     struct list_head run_node;
     int queued;

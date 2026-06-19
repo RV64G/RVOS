@@ -14,6 +14,8 @@ struct platform_info {
     uint32_t uart_irq;
     uint64_t irq_base;
     uint64_t irq_size;
+    uint64_t irq_context;
+    int has_irq_context;
 };
 
 void platform_info_reset(uint64_t boot_hart_id);

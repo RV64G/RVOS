@@ -3,6 +3,7 @@
 #include "context.h"
 #include "list.h"
 #include "task.h"
+#include "vm.h"
 
 static struct task *current_task;
 static LIST_HEAD(run_queue);
@@ -28,6 +29,26 @@ static void make_current_ready(void)
         current_task->state = TASK_READY;
         sched_enqueue(current_task);
     }
+}
+
+static void switch_task_vm(struct task *old, struct task *next)
+{
+    if (!next || !next->vm_space)
+    {
+        return;
+    }
+
+    if (old && old->vm_space == next->vm_space)
+    {
+        return;
+    }
+
+    /*
+     * 这里假设每个可调度地址空间都映射了内核代码、当前内核栈和目标 task 的内核栈。
+     * 当前所有 task 仍共享 kernel_vm_space()；后续独立用户页表接入时，必须先满足
+     * 这个约束，再允许 scheduler 切换 satp。
+     */
+    vm_activate_sv39(next->vm_space);
 }
 
 void sched_init(struct task *boot_task)
@@ -66,6 +87,7 @@ void sched_yield(void)
 
     make_current_ready();
     next->state = TASK_RUNNING;
+    switch_task_vm(old, next);
     current_task = next;
     context_switch(&old->context, &next->context);
 }
@@ -97,6 +119,7 @@ struct trap_frame *sched_from_trap(struct trap_frame *frame)
     old->trap_frame = frame;
     make_current_ready();
     next->state = TASK_RUNNING;
+    switch_task_vm(old, next);
     current_task = next;
     return next->trap_frame;
 }

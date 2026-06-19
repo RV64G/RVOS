@@ -426,6 +426,64 @@ int vm_space_create(struct vm_space *space)
     return space->root_table != 0;
 }
 
+static int copy_kernel_mappings_from_table(struct vm_space *dst, pte_t *table,
+                                           int level, uint64_t va_base)
+{
+    uint64_t step = page_size_for_level(level);
+
+    for (uint64_t i = 0; i < PTE_COUNT; i++)
+    {
+        pte_t pte = table[i];
+        if ((pte & PTE_V) == 0)
+        {
+            continue;
+        }
+
+        uint64_t va = va_base + i * step;
+        if (pte_is_leaf(pte))
+        {
+            uint64_t flags = pte_flags_to_vm(pte);
+            if ((flags & VM_MAP_USER) != 0)
+            {
+                continue;
+            }
+
+            if (!vm_map_range(dst, va, pte_to_phys(pte), step, flags))
+            {
+                return 0;
+            }
+            continue;
+        }
+
+        if (level == 0)
+        {
+            return 0;
+        }
+
+        pte_t *next = (pte_t *)(uintptr_t)pte_to_phys(pte);
+        if (!copy_kernel_mappings_from_table(dst, next, level - 1, va))
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+int vm_copy_kernel_mappings(struct vm_space *dst, const struct vm_space *src)
+{
+    if (!dst || !dst->root_table || !src || !src->root_table)
+    {
+        return 0;
+    }
+
+    /*
+     * 复制的是“映射关系”，不是页表页本身。这样用户页表后续添加 U-mode 映射时，
+     * 不会修改 kernel_vm_space() 的中间页表。
+     */
+    return copy_kernel_mappings_from_table(dst, src->root_table, 2, 0);
+}
+
 int vm_map_range(struct vm_space *space, uint64_t va, uint64_t pa,
                  uint64_t size, uint64_t flags)
 {

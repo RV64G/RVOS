@@ -9,6 +9,7 @@
 #include "page_alloc.h"
 #include "platform.h"
 #include "printk.h"
+#include "csr.h"
 #include "selftest.h"
 #include "task.h"
 #include "timer.h"
@@ -133,6 +134,12 @@ static int validate_boot_info(const struct kernel_boot_info *boot_info)
  */
 void kernel_entry(struct kernel_boot_info *boot_info)
 {
+    /*
+     * EFI loader 可能是在固件页表下跳进来的。等 PC 进入内核镜像后再清 satp，
+     * 可以避开“在 EFI 镜像里关闭分页后继续执行 EFI 指令”的固件差异。
+     */
+    csr_disable_mmu();
+
     sbi_console_puts("\r\nKernel ELF entered\r\n");
 
     if (!validate_boot_info(boot_info))

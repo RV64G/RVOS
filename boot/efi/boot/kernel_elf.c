@@ -261,7 +261,8 @@ static EFI_STATUS read_whole_file(
  * 校验 ELF 头，并计算所有 PT_LOAD 段覆盖的页对齐物理范围。
  *
  * section header 对运行装载没有意义；真正决定“内核怎么进内存”的是 program header。
- * 这里只接受 ET_EXEC，因为当前 kernel.lds 把内核链接到固定物理地址 0x80200000。
+ * 这里只接受 ET_EXEC，因为当前 kernel.lds 把内核链接到固定物理地址。这个地址可以
+ * 通过 KERNEL_PHYS_BASE 在构建时覆盖，但同一个 ELF 仍然不能在运行时任意搬家。
  * ELF 文件本身可能比运行时镜像大很多，因为文件里还会有 debug section、符号表、
  * 字符串表、section header 等工具数据。loader 不按文件大小申请内存，而是只看
  * PT_LOAD 段声明的 p_paddr/p_filesz/p_memsz。
@@ -380,7 +381,8 @@ static EFI_STATUS validate_kernel_elf(
  *
  * EFI_ALLOCATE_ADDRESS 表示“我要的就是 ELF 声明的物理地址”，不是让固件随便找一块。
  * 如果这段地址已经被固件占用，启动应当失败，而不是偷偷换地址；当前内核还不是
- * 可重定位内核。
+ * 可重定位内核。TODO: 等内核虚拟地址布局稳定后，让 loader 选择可用物理地址，
+ * 并把实际加载位置写进 boot_info。
  */
 static EFI_STATUS load_segments(
     efi_system_table_t *st,

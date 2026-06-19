@@ -17,10 +17,13 @@ U-mode 程序
 
 ```text
 kernel_entry()
-  -> user_demo_run()：准备用户 section、用户栈和用户 trap 栈。
-     -> map_user_section()：把 .user section 映射成 U/R/X。
+  -> user_demo_run()：准备最小用户地址空间、用户 section、用户栈和用户 trap 栈。
+     -> vm_space_create()：创建 user_demo_vm。
+     -> vm_copy_kernel_mappings()：复制内核 S-mode 映射，不继承 U-mode 映射。
+     -> map_user_section()：把 .user section 映射到 user_demo_vm，权限为 U/R/X。
      -> phys_alloc_pages()：分配用户栈和 U-mode trap 栈。
-     -> vm_map_range()：把用户栈映射到用户虚拟地址。
+     -> vm_map_range()：把用户栈映射到 user_demo_vm 的用户虚拟地址。
+     -> vm_activate_sv39()：切到 user_demo_vm。
      -> riscv_enter_user()：设置 sepc/sstatus/sscratch，然后 sret 到 U-mode。
 ```
 
@@ -60,6 +63,10 @@ section 可以退化成测试或早期 bring-up 用例。
 当前 `.user` section 中只放一个很小的用户入口。它不走 C 运行时，也不依赖用户
 libc，只是直接按 Linux RISC-V syscall ABI 发起 `write` 和 `exit`，用来验证 U-mode
 入口、trap 换栈和 syscall 分发。
+
+`.user` 不再映射进 `kernel_vm_space()`。当前 demo 会创建一张独立的
+`user_demo_vm`，先复制必要的内核映射，再只在这张用户页表里加入 `.user` 和用户栈。
+这仍然不是完整进程地址空间，但已经不再和 boot task 共用同一张根页表。
 
 ## 用户栈和 trap 栈
 
@@ -137,21 +144,21 @@ sepc += 4
 ```
 
 当前 `copy_from_user()` / `copy_to_user()` 已经独立成公共 helper，`sys_write()` 通过
-它逐字节读取用户缓冲区，再输出到 `printk`。
+它把用户缓冲区分块复制到内核栈缓冲区，再输出到 `printk`。
 
 这还不是最终安全边界：当前 helper 不能从 page fault 中恢复，也没有完整用户地址空间
-边界检查。等每个 task 有独立 `vm_space` 后，这里要继续补用户范围校验、部分复制语义
-和 fault 恢复路径。
+边界检查。等用户 `vm_space` 和 task 生命周期稳定后，这里要继续补用户范围校验、部分
+复制语义和 fault 恢复路径。
 
 ## 当前边界
 
 当前已经证明 U-mode 能通过 `ecall` 进入内核并调用 `write/exit`。还没有实现：
 
 - 用户 task / PCB 生命周期。
-- 用户地址空间独立页表。
+- 完整用户地址空间布局和销毁路径。
 - ELF 用户程序加载。
 - `read/open/close/fork/exec/wait`。
 - 用户异常隔离和进程回收。
 
-下一步如果继续沿着用户态主线推进，优先级应该是用户指针复制 helper、用户 task
-生命周期、独立用户地址空间，再到 ELF loader 和文件系统。
+下一步如果继续沿着用户态主线推进，优先级应该是用户 task 生命周期、用户地址空间销毁、
+用户栈/程序映射所有权，再到 ELF loader 和文件系统。

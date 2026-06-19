@@ -2,6 +2,7 @@
 
 #include "align.h"
 #include "early_log.h"
+#include "early_vm.h"
 #include "sched.h"
 #include "string.h"
 #include "trap.h"
@@ -45,6 +46,7 @@ void task_system_init(struct task *boot_task, const char *name)
     boot_task->arg = 0;
     boot_task->name = name;
     boot_task->trap_frame = 0;
+    boot_task->vm_space = kernel_vm_space();
     timer_event_init(&boot_task->sleep_timer, task_sleep_timeout, boot_task);
     list_init(&boot_task->run_node);
     boot_task->queued = 0;
@@ -97,6 +99,7 @@ int task_create(
     task->arg = arg;
     task->name = name;
     task->trap_frame = initial_frame;
+    task->vm_space = sched_current()->vm_space;
     timer_event_init(&task->sleep_timer, task_sleep_timeout, task);
     list_init(&task->run_node);
     task->queued = 0;
