@@ -6,6 +6,7 @@
 #include "irq.h"
 #include "printk.h"
 #include "sched.h"
+#include "syscall.h"
 #include "trap_frame_offsets.h"
 #include "timer.h"
 
@@ -120,6 +121,7 @@ void trap_init(void)
      * stvec 的低两位是模式位。这里传入自然对齐的函数地址，低两位为 0，
      * 表示 Direct 模式：所有异常和中断先进入同一个 trap_vector。
      */
+    csr_write_sscratch(0);
     csr_write_stvec((uint64_t)trap_vector);
     printk("Trap vector installed\r\n");
 }
@@ -166,7 +168,8 @@ static struct trap_outcome handle_exception(struct trap_frame *frame,
     case SCAUSE_STORE_ACCESS_FAULT:
         return trap_fatal("Store access fault");
     case SCAUSE_USER_ECALL:
-        return trap_fatal("User ecall reached before syscall init");
+        syscall_handle(frame);
+        return trap_handled();
     case SCAUSE_SUPERVISOR_ECALL:
         return trap_fatal("Supervisor ecall reached before syscall init");
     case SCAUSE_INST_PAGE_FAULT:

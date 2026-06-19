@@ -27,6 +27,7 @@
 - [11 内核 Task 与上下文切换](boot/11-kernel-task.md)
 - [12 IRQ 与串口输入](boot/12-irq-console-input.md)
 - [13 Spinlock 与中断状态](boot/13-spinlock.md)
+- [14 Syscall 与最小用户态](boot/14-syscall-and-user.md)
 
 ## 后续专题
 

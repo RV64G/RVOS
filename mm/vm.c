@@ -27,6 +27,7 @@
 #define PTE_R (1ULL << 1)
 #define PTE_W (1ULL << 2)
 #define PTE_X (1ULL << 3)
+#define PTE_U (1ULL << 4)
 #define PTE_A (1ULL << 6)
 #define PTE_D (1ULL << 7)
 
@@ -103,6 +104,10 @@ static uint64_t vm_flags_to_pte(uint64_t flags)
     {
         pte_flags |= PTE_X;
     }
+    if (flags & VM_MAP_USER)
+    {
+        pte_flags |= PTE_U;
+    }
 
     return pte_flags;
 }
@@ -123,6 +128,10 @@ static uint64_t pte_flags_to_vm(pte_t pte)
     {
         flags |= VM_MAP_EXEC;
     }
+    if (pte & PTE_U)
+    {
+        flags |= VM_MAP_USER;
+    }
 
     return flags;
 }
@@ -130,7 +139,7 @@ static uint64_t pte_flags_to_vm(pte_t pte)
 static int vm_flags_are_valid(uint64_t flags)
 {
     // 检查未知flag
-    if ((flags & ~(VM_MAP_READ | VM_MAP_WRITE | VM_MAP_EXEC)) != 0)
+    if ((flags & ~(VM_MAP_READ | VM_MAP_WRITE | VM_MAP_EXEC | VM_MAP_USER)) != 0)
     {
         return 0;
     }

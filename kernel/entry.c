@@ -13,6 +13,7 @@
 #include "task.h"
 #include "timer.h"
 #include "trap.h"
+#include "user.h"
 
 /*
  * boot_info->flags 是一个 bitset。loader 只有在某类启动信息有效时才会置位，
@@ -160,6 +161,9 @@ void kernel_entry(struct kernel_boot_info *boot_info)
     if (!kernel_selftest_run())
         goto HALT;
     printk("Kernel selftest passed\r\n");
+#else
+    if (!user_demo_run())
+        goto HALT;
 #endif
     console_debug_loop();
 HALT:

@@ -46,4 +46,9 @@ static inline void csr_write_stvec(uint64_t value)
     __asm__ volatile ("csrw stvec, %0" : : "r"(value) : "memory");
 }
 
+static inline void csr_write_sscratch(uint64_t value)
+{
+    __asm__ volatile ("csrw sscratch, %0" : : "r"(value) : "memory");
+}
+
 #endif

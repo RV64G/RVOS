@@ -8,6 +8,8 @@
 #define VM_MAP_READ  (1ULL << 0)
 #define VM_MAP_WRITE (1ULL << 1)
 #define VM_MAP_EXEC  (1ULL << 2)
+/** 允许 U-mode 访问这段映射。没有这个 flag 时映射仅供 S-mode 内核使用。 */
+#define VM_MAP_USER  (1ULL << 3)
 
 typedef uint64_t pte_t;
 

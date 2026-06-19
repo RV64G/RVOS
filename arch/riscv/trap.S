@@ -6,18 +6,39 @@
 trap_vector:
     /*
      * RISC-V 触发 trap 时只会写 sepc/scause/stval/sstatus 等 CSR，不会自动保存
-     * 通用寄存器，也不会自动换栈。这里仍然使用当前内核栈，把 x1..x31 和关键
-     * CSR 都压成一个 trap_frame，再交给 C 侧判断原因。
+     * 通用寄存器。S-mode 内核 trap 继续使用当前内核栈；U-mode trap 则通过
+     * sscratch 切到内核准备好的 trap 栈，避免把 trap_frame 写到用户栈里。
+    */
+    csrrw sp, sscratch, sp
+    bnez sp, .Lhave_kernel_sp
+
+    /*
+     * sscratch 为 0 表示 trap 发生在 S-mode。上面的 csrrw 临时把 sp 变成 0，
+     * 再交换一次恢复原内核 sp，并保持 sscratch 为 0。
+     */
+    csrrw sp, sscratch, sp
+.Lhave_kernel_sp:
+    /*
+     * 到这里时 sp 一定是内核可用栈：
+     *
+     * - S-mode trap：sp 是原内核栈，sscratch 为 0；
+     * - U-mode trap：sp 是内核 trap 栈顶，sscratch 是被打断的用户 sp。
      */
     addi sp, sp, -TRAP_FRAME_SIZE
 
+.Lsave_trap_frame:
     sd ra, TRAP_FRAME_RA(sp)
     sd t0, TRAP_FRAME_T0(sp)
-    addi t0, sp, TRAP_FRAME_SIZE
+    sd t1, TRAP_FRAME_T1(sp)
+    /* t0 先记录 trap 前的内核 sp；如果来自 U-mode，下面再换成用户 sp。 */
+    addi t0, sp, TRAP_FRAME_SIZE//把之前给trap加的补上
+    csrr t1, sscratch
+    beqz t1, .Lsave_sp
+    mv t0, t1
+.Lsave_sp:
     sd t0, TRAP_FRAME_SP(sp)
     sd gp, TRAP_FRAME_GP(sp)
     sd tp, TRAP_FRAME_TP(sp)
-    sd t1, TRAP_FRAME_T1(sp)
     sd t2, TRAP_FRAME_T2(sp)
     sd s0, TRAP_FRAME_S0(sp)
     sd s1, TRAP_FRAME_S1(sp)
@@ -65,6 +86,15 @@ trap_vector:
     ld t0, TRAP_FRAME_SEPC(sp)
     csrw sepc, t0
     ld t0, TRAP_FRAME_SSTATUS(sp)
+    li t1, 0x100
+    and t1, t0, t1 //查看spp位
+    bnez t1, .Lrestore_kernel_scratch//不为用户态时跳转
+    addi t1, sp, TRAP_FRAME_SIZE//为用户态时准备内核frame
+    csrw sscratch, t1
+    j .Lrestore_sstatus
+.Lrestore_kernel_scratch:
+    csrw sscratch, zero
+.Lrestore_sstatus:
     csrw sstatus, t0
 
     ld ra, TRAP_FRAME_RA(sp)
