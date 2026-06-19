@@ -122,20 +122,26 @@ sepc += 4
 
 否则 `sret` 回到用户态后会再次执行同一条 `ecall`。
 
-## copy_from_user 的雏形
+## 用户指针复制
 
 `write(fd, user_buf, count)` 需要从用户页读取数据。RISC-V 默认不允许 S-mode 直接访问
 带 U 位的用户页；内核需要临时打开 `sstatus.SUM`：
 
 ```text
 保存旧 sstatus
+关闭 SIE，避免 SUM=1 时被中断 handler 打断
 打开 SUM
 读取用户缓冲区
 恢复旧 SUM 状态
+恢复旧 SIE 状态
 ```
 
-当前 `sys_write()` 只支持 `stdout/stderr`，并且逐字节输出到 `printk`。后续正式
-`copy_from_user()` 应该独立成公共 helper，并且要处理用户指针越界、缺页和部分复制。
+当前 `copy_from_user()` / `copy_to_user()` 已经独立成公共 helper，`sys_write()` 通过
+它逐字节读取用户缓冲区，再输出到 `printk`。
+
+这还不是最终安全边界：当前 helper 不能从 page fault 中恢复，也没有完整用户地址空间
+边界检查。等每个 task 有独立 `vm_space` 后，这里要继续补用户范围校验、部分复制语义
+和 fault 恢复路径。
 
 ## 当前边界
 

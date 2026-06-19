@@ -5,28 +5,15 @@
 #include "console.h"
 #include "csr.h"
 #include "printk.h"
+#include "user_access.h"
 
 #define SYS_READ  63ULL
 #define SYS_WRITE 64ULL
 #define SYS_EXIT  93ULL
 
+#define SYS_WRITE_CHUNK_SIZE 128ULL
+
 #define SSTATUS_SIE (1ULL << 1)
-#define SSTATUS_SUM (1ULL << 18)
-
-static uint64_t user_access_begin(void)
-{
-    uint64_t old_sstatus = csr_read_sstatus();
-    csr_set_sstatus(SSTATUS_SUM);
-    return old_sstatus;
-}
-
-static void user_access_end(uint64_t old_sstatus)
-{
-    if ((old_sstatus & SSTATUS_SUM) == 0)
-    {
-        __asm__ volatile("csrc sstatus, %0" : : "r"(SSTATUS_SUM) : "memory");
-    }
-}
 
 static long sys_write(uint64_t fd, uint64_t user_buf, uint64_t count)
 {
@@ -35,16 +22,30 @@ static long sys_write(uint64_t fd, uint64_t user_buf, uint64_t count)
         return -1;
     }
 
-    const char *buf = (const char *)(uintptr_t)user_buf;
-    uint64_t old_sstatus = user_access_begin();
+    char chunk[SYS_WRITE_CHUNK_SIZE + 1];
+    uint64_t copied = 0;
 
-    for (uint64_t i = 0; i < count; i++)
+    while (copied < count)
     {
-        char out[2] = { buf[i], '\0' };
-        printk(out);
+        uint64_t remaining = count - copied;
+        uint64_t chunk_size =
+            remaining < SYS_WRITE_CHUNK_SIZE ? remaining : SYS_WRITE_CHUNK_SIZE;
+
+        if (!copy_from_user(chunk, (const void *)(uintptr_t)(user_buf + copied),
+                            chunk_size))
+        {
+            return -1;
+        }
+
+        /*
+         * printk() 接收 C 字符串；write() 接收的是任意长度缓冲区，不要求用户缓冲区
+         * 自带 '\0'。所以这里分块复制到内核栈，再补一个临时字符串结尾。
+         */
+        chunk[chunk_size] = '\0';
+        printk(chunk);
+        copied += chunk_size;
     }
 
-    user_access_end(old_sstatus);
     return (long)count;
 }
 
