@@ -6,9 +6,12 @@
 #include "early_log.h"
 #include "early_vm.h"
 #include "page_alloc.h"
+#include "platform.h"
 #include "printk.h"
 #include "sched.h"
 #include "task.h"
+#include "timer.h"
+#include "trap.h"
 #include "vm.h"
 
 /*
@@ -21,6 +24,7 @@
 #define USER_KERNEL_STACK_PAGES 4ULL
 #define USER_DEMO_TASK_COUNT 3ULL
 #define USER_IDLE_STACK_PAGES 2ULL
+#define USER_IDLE_STATUS_PERIOD_MS 1000ULL
 
 extern char __user_start[];
 extern char __user_end[];
@@ -33,7 +37,7 @@ extern char user_demo_message_c[];
 extern char user_demo_message_c_end[];
 extern void riscv_enter_user(uint64_t entry, uint64_t stack_top,
                              uint64_t trap_stack_top, uint64_t arg0,
-                             uint64_t arg1, uint64_t arg2);
+                             uint64_t arg1, uint64_t arg2, uint64_t arg3);
 
 struct user_task_start
 {
@@ -43,12 +47,99 @@ struct user_task_start
     uint64_t arg0;
     uint64_t arg1;
     uint64_t arg2;
+    uint64_t arg3;
 };
 
 static struct task user_tasks[USER_DEMO_TASK_COUNT];
 static struct vm_space user_vms[USER_DEMO_TASK_COUNT];
 static struct user_task_start user_starts[USER_DEMO_TASK_COUNT];
 static struct task idle_task;
+static struct timer_event idle_status_timer;
+static volatile int idle_status_due;
+
+static const char *task_state_name(enum task_state state)
+{
+    switch (state)
+    {
+    case TASK_UNUSED:
+        return "unused";
+    case TASK_READY:
+        return "ready";
+    case TASK_RUNNING:
+        return "running";
+    case TASK_BLOCKED:
+        return "blocked";
+    case TASK_ZOMBIE:
+        return "zombie";
+    default:
+        return "unknown";
+    }
+}
+
+static void print_task_line(const struct task *task)
+{
+    printk("  task id=");
+    printk_u64(task->id);
+    printk(" name=");
+    printk(task->name ? task->name : "(null)");
+    printk(" state=");
+    printk(task_state_name(task->state));
+    printk("\r\n");
+}
+
+static void print_cycles_us(const char *cycles_name, const char *us_name,
+                            uint64_t cycles)
+{
+    const struct platform_info *platform = platform_info();
+
+    printk_dec_field(cycles_name, cycles);
+    if (platform->timebase_frequency != 0)
+    {
+        uint64_t us = (cycles * 1000000ULL) / platform->timebase_frequency;
+        printk_dec_field(us_name, us);
+    }
+}
+
+static void print_user_demo_status(void)
+{
+    struct trap_stats stats;
+
+    printk("User demo task status\r\n");
+    for (uint64_t i = 0; i < USER_DEMO_TASK_COUNT; i++)
+    {
+        print_task_line(&user_tasks[i]);
+    }
+    print_task_line(&idle_task);
+
+    trap_stats_snapshot(&stats);
+    printk("Trap statistics\r\n");
+    printk_dec_field("trap_total_count", stats.total_count);
+    print_cycles_us("trap_total_max_cycles", "trap_total_max_us",
+                    stats.total_max_cycles);
+    printk_dec_field("trap_syscall_count", stats.syscall_count);
+    print_cycles_us("trap_syscall_max_cycles", "trap_syscall_max_us",
+                    stats.syscall_max_cycles);
+    printk_dec_field("trap_yield_count", stats.syscall_yield_count);
+    print_cycles_us("trap_yield_max_cycles", "trap_yield_max_us",
+                    stats.syscall_yield_max_cycles);
+    printk_dec_field("trap_interrupt_count", stats.interrupt_count);
+    print_cycles_us("trap_interrupt_max_cycles", "trap_interrupt_max_us",
+                    stats.interrupt_max_cycles);
+    printk_dec_field("trap_timer_count", stats.timer_count);
+    print_cycles_us("trap_timer_max_cycles", "trap_timer_max_us",
+                    stats.timer_max_cycles);
+    printk_dec_field("trap_external_count", stats.external_count);
+    print_cycles_us("trap_external_max_cycles", "trap_external_max_us",
+                    stats.external_max_cycles);
+}
+
+static void idle_status_timeout(struct timer_event *event, void *context)
+{
+    (void)event;
+    (void)context;
+
+    idle_status_due = 1;
+}
 
 static int map_user_section(struct vm_space *space)
 {
@@ -77,7 +168,7 @@ static void user_task_entry(void *arg)
 
     riscv_enter_user(start->entry, start->user_stack_top,
                      start->trap_stack_top, start->arg0, start->arg1,
-                     start->arg2);
+                     start->arg2, start->arg3);
 
     early_halt_forever();
 }
@@ -87,8 +178,17 @@ static void user_idle_entry(void *arg)
     (void)arg;
 
     printk("User scheduler idle ready\r\n");
+    idle_status_due = 1;
+    timer_event_init(&idle_status_timer, idle_status_timeout, 0);
+    (void)timer_schedule_ms(&idle_status_timer, USER_IDLE_STATUS_PERIOD_MS,
+                            USER_IDLE_STATUS_PERIOD_MS);
     for (;;)
     {
+        if (idle_status_due)
+        {
+            idle_status_due = 0;
+            print_user_demo_status();
+        }
         console_drain_input();
         __asm__ volatile("wfi" ::: "memory");
     }
@@ -101,7 +201,7 @@ static uint64_t message_length(char *start, char *end)
 
 static int create_one_user_task(uint64_t index, const char *name,
                                 char *message, uint64_t message_size,
-                                uint64_t sleep_ms)
+                                uint64_t sleep_ms, uint64_t repeat_count)
 {
     void *kernel_stack_phys = phys_alloc_pages(USER_KERNEL_STACK_PAGES);
     void *user_stack_phys = phys_alloc_pages(USER_STACK_PAGES);
@@ -174,6 +274,7 @@ static int create_one_user_task(uint64_t index, const char *name,
     user_starts[index].arg0 = (uint64_t)(uintptr_t)message;
     user_starts[index].arg1 = message_size;
     user_starts[index].arg2 = sleep_ms;
+    user_starts[index].arg3 = repeat_count;
 
     if (!task_create(&user_tasks[index], name, kernel_stack_phys,
                      kernel_stack_size, user_task_entry, &user_starts[index]))
@@ -207,6 +308,7 @@ static int create_idle_task(void)
     }
 
     idle_task.vm_space = kernel_vm_space();
+    sched_set_idle_task(&idle_task);
     return 1;
 }
 
@@ -215,7 +317,7 @@ int user_demo_run(void)
     if (!create_one_user_task(0, "user-a", user_demo_message_a,
                               message_length(user_demo_message_a,
                                              user_demo_message_a_end),
-                              15))
+                              15, 0))
     {
         return 0;
     }
@@ -223,7 +325,7 @@ int user_demo_run(void)
     if (!create_one_user_task(1, "user-b", user_demo_message_b,
                               message_length(user_demo_message_b,
                                              user_demo_message_b_end),
-                              25))
+                              25, 0))
     {
         return 0;
     }
@@ -231,7 +333,7 @@ int user_demo_run(void)
     if (!create_one_user_task(2, "user-c", user_demo_message_c,
                               message_length(user_demo_message_c,
                                              user_demo_message_c_end),
-                              35))
+                              35, 8))
     {
         return 0;
     }

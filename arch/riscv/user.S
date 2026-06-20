@@ -9,6 +9,7 @@ riscv_enter_user:
      * a3 = initial user a0
      * a4 = initial user a1
      * a5 = initial user a2
+     * a6 = initial user a3
      */
     csrw sscratch, a2
     csrw sepc, a0
@@ -26,6 +27,7 @@ riscv_enter_user:
     mv a0, a3
     mv a1, a4
     mv a2, a5
+    mv a3, a6
     sret
 
 .section .user, "ax"
@@ -44,14 +46,14 @@ user_demo_start:
      * a0 = 本 task 要打印的用户态字符串地址
      * a1 = 字符串长度
      * a2 = 每轮打印后的 sleep 毫秒数
+     * a3 = 循环次数；0 表示一直循环
      *
      * 这几个值保存在 s 寄存器里，后续 ecall 可以自由使用 a0-a7 传参。
      */
     mv s0, a0
     mv s1, a1
     mv s2, a2
-    li s3, 3
-
+    mv s3, a3
 1:
     /*
      * write(fd=1, buf=s0, count=s1)
@@ -86,14 +88,15 @@ user_demo_start:
     li a7, 1000
     ecall
 
+    beqz s3, 1b
     addi s3, s3, -1
     bnez s3, 1b
 
     /*
      * exit(status=0)
      *
-     * 当前实现只把 task 标记成 ZOMBIE 并切走，还没有 wait/waitpid，也没有完整
-     * 用户资源回收。等进程模型成形后，这里会变成真正的进程退出路径。
+     * repeat_count 非 0 的 task 会走到这里。当前实现只把 task 标记成 ZOMBIE 并
+     * 切走，还没有 wait/waitpid，也没有完整用户资源回收。
      */
     li a0, 0
     li a7, 93

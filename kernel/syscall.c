@@ -6,17 +6,6 @@
 #include "task.h"
 #include "user_access.h"
 
-#define SYS_READ        63ULL
-#define SYS_WRITE       64ULL
-#define SYS_EXIT        93ULL
-#define SYS_SCHED_YIELD 124ULL
-
-/*
- * 临时 demo syscall：a0 直接传毫秒数。后续如果要贴近 Linux ABI，应改成
- * nanosleep/clock_nanosleep 的 timespec 参数。
- */
-#define SYS_SLEEP_MS 1000ULL
-
 #define SYS_WRITE_CHUNK_SIZE 128ULL
 
 static long sys_write(uint64_t fd, uint64_t user_buf, uint64_t count)

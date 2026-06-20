@@ -6,29 +6,32 @@
 #include "early_log.h"
 #include "irq.h"
 #include "printk.h"
+#include "riscv/sbi.h"
 #include "sched.h"
 #include "syscall.h"
-#include "trap_frame_offsets.h"
 #include "timer.h"
+#include "trap_frame_offsets.h"
 
 #define SCAUSE_INTERRUPT (1ULL << 63)
 #define SCAUSE_CODE_MASK (~SCAUSE_INTERRUPT)
 
 #define SCAUSE_SUPERVISOR_SOFTWARE_INTERRUPT 1ULL
-#define SCAUSE_SUPERVISOR_TIMER_INTERRUPT    5ULL
+#define SCAUSE_SUPERVISOR_TIMER_INTERRUPT 5ULL
 #define SCAUSE_SUPERVISOR_EXTERNAL_INTERRUPT 9ULL
 
 #define SCAUSE_ILLEGAL_INSTRUCTION 2ULL
-#define SCAUSE_BREAKPOINT          3ULL
-#define SCAUSE_LOAD_ACCESS_FAULT   5ULL
-#define SCAUSE_STORE_ACCESS_FAULT  7ULL
-#define SCAUSE_USER_ECALL          8ULL
-#define SCAUSE_SUPERVISOR_ECALL    9ULL
-#define SCAUSE_INST_PAGE_FAULT     12ULL
-#define SCAUSE_LOAD_PAGE_FAULT     13ULL
-#define SCAUSE_STORE_PAGE_FAULT    15ULL
+#define SCAUSE_BREAKPOINT 3ULL
+#define SCAUSE_LOAD_ACCESS_FAULT 5ULL
+#define SCAUSE_STORE_ACCESS_FAULT 7ULL
+#define SCAUSE_USER_ECALL 8ULL
+#define SCAUSE_SUPERVISOR_ECALL 9ULL
+#define SCAUSE_INST_PAGE_FAULT 12ULL
+#define SCAUSE_LOAD_PAGE_FAULT 13ULL
+#define SCAUSE_STORE_PAGE_FAULT 15ULL
 
 extern void trap_vector(void);
+
+static struct trap_stats current_trap_stats;
 
 enum trap_result
 {
@@ -116,6 +119,16 @@ static struct trap_outcome trap_fatal(const char *reason)
     return outcome;
 }
 
+static void update_trap_stat(uint64_t *count, uint64_t *max_cycles,
+                             uint64_t elapsed_cycles)
+{
+    (*count)++;
+    if (elapsed_cycles > *max_cycles)
+    {
+        *max_cycles = elapsed_cycles;
+    }
+}
+
 void trap_init(void)
 {
     /*
@@ -124,7 +137,41 @@ void trap_init(void)
      */
     csr_write_sscratch(0);
     csr_write_stvec((uint64_t)trap_vector);
+    current_trap_stats.total_count = 0;
+    current_trap_stats.total_max_cycles = 0;
+    current_trap_stats.interrupt_count = 0;
+    current_trap_stats.interrupt_max_cycles = 0;
+    current_trap_stats.timer_count = 0;
+    current_trap_stats.timer_max_cycles = 0;
+    current_trap_stats.external_count = 0;
+    current_trap_stats.external_max_cycles = 0;
+    current_trap_stats.syscall_count = 0;
+    current_trap_stats.syscall_max_cycles = 0;
+    current_trap_stats.syscall_yield_count = 0;
+    current_trap_stats.syscall_yield_max_cycles = 0;
     printk("Trap vector installed\r\n");
+}
+
+void trap_stats_snapshot(struct trap_stats *stats)
+{
+    if (!stats)
+    {
+        return;
+    }
+
+    stats->total_count = current_trap_stats.total_count;
+    stats->total_max_cycles = current_trap_stats.total_max_cycles;
+    stats->interrupt_count = current_trap_stats.interrupt_count;
+    stats->interrupt_max_cycles = current_trap_stats.interrupt_max_cycles;
+    stats->timer_count = current_trap_stats.timer_count;
+    stats->timer_max_cycles = current_trap_stats.timer_max_cycles;
+    stats->external_count = current_trap_stats.external_count;
+    stats->external_max_cycles = current_trap_stats.external_max_cycles;
+    stats->syscall_count = current_trap_stats.syscall_count;
+    stats->syscall_max_cycles = current_trap_stats.syscall_max_cycles;
+    stats->syscall_yield_count = current_trap_stats.syscall_yield_count;
+    stats->syscall_yield_max_cycles =
+        current_trap_stats.syscall_yield_max_cycles;
 }
 
 static struct trap_outcome handle_interrupt(struct trap_frame *frame,
@@ -132,7 +179,8 @@ static struct trap_outcome handle_interrupt(struct trap_frame *frame,
 {
     (void)frame;
 
-    switch (code) {
+    switch (code)
+    {
     case SCAUSE_SUPERVISOR_SOFTWARE_INTERRUPT:
         return trap_fatal("Supervisor software interrupt");
     case SCAUSE_SUPERVISOR_TIMER_INTERRUPT:
@@ -150,10 +198,12 @@ static struct trap_outcome handle_interrupt(struct trap_frame *frame,
 static struct trap_outcome handle_exception(struct trap_frame *frame,
                                             uint64_t code)
 {
-    if (code == SCAUSE_BREAKPOINT) {
+    if (code == SCAUSE_BREAKPOINT)
+    {
         /*
-         * 当前只把 32-bit ebreak 当作调试断点处理，所以这里把 sepc 前进 4 字节。
-         * 如果以后允许压缩指令触发 c.ebreak，需要根据指令长度决定前进 2 还是 4。
+         * 当前只把 32-bit ebreak 当作调试断点处理，所以这里把 sepc 前进 4
+         * 字节。 如果以后允许压缩指令触发 c.ebreak，需要根据指令长度决定前进 2
+         * 还是 4。
          */
         print_trap_frame("Breakpoint exception", frame);
         frame->sepc += 4;
@@ -161,7 +211,8 @@ static struct trap_outcome handle_exception(struct trap_frame *frame,
         return trap_handled();
     }
 
-    switch (code) {
+    switch (code)
+    {
     case SCAUSE_ILLEGAL_INSTRUCTION:
         return trap_fatal("Illegal instruction exception");
     case SCAUSE_LOAD_ACCESS_FAULT:
@@ -187,17 +238,58 @@ static struct trap_outcome handle_exception(struct trap_frame *frame,
 
 struct trap_frame *trap_handle(struct trap_frame *frame)
 {
+    uint64_t start_cycles = sbi_get_time();
     uint64_t code = frame->scause & SCAUSE_CODE_MASK;
+    uint64_t syscall_number = frame->a7;
+    int is_interrupt = (frame->scause & SCAUSE_INTERRUPT) != 0;
     struct trap_outcome outcome;
 
-    if ((frame->scause & SCAUSE_INTERRUPT) != 0) {
+    if (is_interrupt)
+    {
         outcome = handle_interrupt(frame, code);
-    } else {
+    }
+    else
+    {
         outcome = handle_exception(frame, code);
     }
 
-    if (outcome.result == TRAP_FATAL) {
+    if (outcome.result == TRAP_FATAL)
+    {
         trap_stop(outcome.reason, frame);
+    }
+
+    uint64_t elapsed_cycles = sbi_get_time() - start_cycles;
+    update_trap_stat(&current_trap_stats.total_count,
+                     &current_trap_stats.total_max_cycles, elapsed_cycles);
+    if (is_interrupt)
+    {
+        update_trap_stat(&current_trap_stats.interrupt_count,
+                         &current_trap_stats.interrupt_max_cycles,
+                         elapsed_cycles);
+        if (code == SCAUSE_SUPERVISOR_TIMER_INTERRUPT)
+        {
+            update_trap_stat(&current_trap_stats.timer_count,
+                             &current_trap_stats.timer_max_cycles,
+                             elapsed_cycles);
+        }
+        else if (code == SCAUSE_SUPERVISOR_EXTERNAL_INTERRUPT)
+        {
+            update_trap_stat(&current_trap_stats.external_count,
+                             &current_trap_stats.external_max_cycles,
+                             elapsed_cycles);
+        }
+    }
+    else if (code == SCAUSE_USER_ECALL)
+    {
+        update_trap_stat(&current_trap_stats.syscall_count,
+                         &current_trap_stats.syscall_max_cycles,
+                         elapsed_cycles);
+        if (syscall_number == SYS_SCHED_YIELD)
+        {
+            update_trap_stat(&current_trap_stats.syscall_yield_count,
+                             &current_trap_stats.syscall_yield_max_cycles,
+                             elapsed_cycles);
+        }
     }
 
     console_drain_input();

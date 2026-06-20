@@ -45,4 +45,21 @@ struct trap_frame {
 void trap_init(void);
 struct trap_frame *trap_handle(struct trap_frame *frame);
 
+struct trap_stats {
+    uint64_t total_count;
+    uint64_t total_max_cycles;
+    uint64_t interrupt_count;
+    uint64_t interrupt_max_cycles;
+    uint64_t timer_count;
+    uint64_t timer_max_cycles;
+    uint64_t external_count;
+    uint64_t external_max_cycles;
+    uint64_t syscall_count;
+    uint64_t syscall_max_cycles;
+    uint64_t syscall_yield_count;
+    uint64_t syscall_yield_max_cycles;
+};
+
+void trap_stats_snapshot(struct trap_stats *stats);
+
 #endif

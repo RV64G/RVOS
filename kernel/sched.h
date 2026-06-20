@@ -22,6 +22,14 @@ void sched_reset(void);
 void sched_enqueue(struct task *task);
 
 /**
+ * 设置当前 hart 的 idle task。
+ *
+ * idle task 不参与普通 READY 队列；只有没有其它 READY task 时，scheduler 才会
+ * 返回 idle task 作为兜底执行流。
+ */
+void sched_set_idle_task(struct task *task);
+
+/**
  * 从 boot task 启动第一个 READY task，但不把 boot task 放回运行队列。
  *
  * 用户态 demo 使用这个入口把 CPU 交给调度器；后续没有 wait/reaper 前，boot task

@@ -6,19 +6,34 @@
 #include "vm.h"
 
 static struct task *current_task;
+static struct task *idle_task;
 static LIST_HEAD(run_queue);
 static int reschedule_requested;
+
+static void dequeue_task(struct task *task)
+{
+    if (!task || !task->queued)
+    {
+        return;
+    }
+
+    list_del(&task->run_node);
+    task->queued = 0;
+}
 
 static struct task *pick_next_task(void)
 {
     if (list_empty(&run_queue))
     {
+        if (idle_task && current_task != idle_task)
+        {
+            return idle_task;
+        }
         return 0;
     }
 
     struct task *next = list_first_entry(&run_queue, struct task, run_node);
-    list_del(&next->run_node);
-    next->queued = 0;
+    dequeue_task(next);
     return next;
 }
 
@@ -55,6 +70,7 @@ void sched_init(struct task *boot_task)
 {
     list_init(&run_queue);
     current_task = boot_task;
+    idle_task = 0;
     reschedule_requested = 0;
 }
 
@@ -62,18 +78,30 @@ void sched_reset(void)
 {
     list_init(&run_queue);
     current_task = 0;
+    idle_task = 0;
     reschedule_requested = 0;
 }
 
 void sched_enqueue(struct task *task)
 {
-    if (!task || task->state != TASK_READY || task->queued)
+    if (!task || task == idle_task || task->state != TASK_READY || task->queued)
     {
         return;
     }
 
     list_add_tail(&task->run_node, &run_queue);
     task->queued = 1;
+}
+
+void sched_set_idle_task(struct task *task)
+{
+    if (!task)
+    {
+        return;
+    }
+
+    dequeue_task(task);
+    idle_task = task;
 }
 
 void sched_start_first(void)
