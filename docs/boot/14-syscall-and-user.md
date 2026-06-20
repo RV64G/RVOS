@@ -227,6 +227,38 @@ trap.S
 分开。后续做多核时，这个标志需要变成 per-hart 状态，不能继续用一个全局变量表达所有
 CPU 的调度请求。
 
+## syscall 耗时统计怎么看
+
+当前 trap 统计用的是 `sbi_get_time()`，也就是平台 timebase tick，不是 CPU pipeline
+cycle。RISC-V 规范把 `cycle`、`time`、`instret` 分开定义：`cycle` 是处理器 cycle
+counter，`time` 是 real-time clock，`RDTIME` 读的是 `time` 计数器。这个计数器每个
+real-time clock tick 增长 1，tick 周期由执行环境提供。所以这里日志字段里的
+`cycles` 是早期命名不精确，更准确地说应该叫 timebase ticks。
+
+比如 `timebase_frequency=4000000` 时，一个 tick 是 250 ns；打印出来的
+`trap_yield_max_cycles=3` 表示 3 个 timebase tick，不是 CPU 执行了 3 个周期。
+
+统计窗口也不是完整 syscall 往返。当前 `trap_handle()` 的计时从进入 C handler 后开始，
+到 syscall handler 返回后结束：
+
+```text
+trap.S 保存寄存器              不计入
+trap_handle() C 分发            计入
+syscall_handle()                计入
+具体 syscall 工作               计入
+sched_from_trap()               不计入
+trap.S 恢复寄存器和 sret        不计入
+```
+
+所以 `trap_yield_max_cycles` 只能说明“yield syscall 在 C 分发和 handler 里的开销很小”，
+不能当作完整用户态 `ecall -> sret` 往返耗时。它适合用来和 `write` 区分：`yield` 不做
+I/O，数值接近 syscall 框架的低负载路径；`write` 会经过 `copy_from_user()` 和
+`printk`，会被输出后端影响。
+
+参考：
+
+- RISC-V Unprivileged ISA, Zicntr counters：<https://docs.riscv.org/reference/isa/v20260120/unpriv/counters.html>
+
 ## 用户指针复制
 
 `write(fd, user_buf, count)` 需要从用户页读取数据。RISC-V 默认不允许 S-mode 直接访问

@@ -77,12 +77,17 @@ trap 还没正式接管，所以表现通常是没有后续输出或直接卡住
 
 ## 当前 UART 实现范围
 
-当前 UART 驱动已经覆盖 ns16550 兼容设备的最小收发路径。
+当前 UART 驱动已经覆盖 ns16550 兼容设备的最小收发路径，并把正式 `printk` 从纯轮询
+输出推进到 TX ring buffer + 发送中断。
 
 输出路径：
 
-- 等待 `LSR.THRE` 表示发送保持寄存器为空；
-- 写 `THR` 输出一个字符；
+- 中断尚未打开时，`printk` 仍然用 `uart_putchar()` 轮询输出，保证早期日志不丢；
+- UART/PLIC 初始化完成后，`printk` 把字符串写入 TX ring buffer；
+- `uart_write()` 只主动 kick 一次当前已经可写的 `THR`，不等待后续字节全部发完；
+- 后续 `THR` 再次变空时，UART 通过 `IER.THRI` 触发外部中断；
+- `uart_handle_interrupt()` 从 TX ring buffer 继续取字符写入 `THR`；
+- TX ring buffer 为空后关闭 `IER.THRI`，避免空发送寄存器反复触发中断。
 
 输入路径：
 
@@ -90,11 +95,14 @@ trap 还没正式接管，所以表现通常是没有后续输出或直接卡住
 - 外部中断经 PLIC 进入统一 trap；
 - `uart_handle_interrupt()` 读取 `RBR`，把字符放进 console input buffer。
 
+保留轮询输出函数不是倒退。`uart_putchar()` 仍然服务于两个场景：UART 中断还没打开的
+早期阶段，以及 TX ring buffer 极端满载时的兜底推进。正常 `printk` 路径应该走
+`uart_write()`。
+
 它仍然不是完整串口驱动：
 
 - 不重新配置波特率；
 - 不配置 FIFO 触发水位；
 - 不实现 tty 行规程、阻塞 read 或信号；
-- 不处理发送中断，输出仍然轮询。
 
 串口输入链路见 [12 IRQ 与串口输入](12-irq-console-input.md)。
