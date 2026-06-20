@@ -9,6 +9,7 @@
 #include "platform.h"
 #include "printk.h"
 #include "sched.h"
+#include "string.h"
 #include "task.h"
 #include "timer.h"
 #include "trap.h"
@@ -18,7 +19,9 @@
  * Sv39 低半区最大到 0x3f_ffff_ffff。用户 demo 栈放在低半区顶部附近，避开当前
  * 内核复制进用户页表的低地址 direct map。
  */
+#define USER_TEXT_BASE  0x0000000000010000ULL
 #define USER_STACK_TOP  0x0000003ffff00000ULL
+#define USER_TEXT_FLAGS (VM_MAP_READ | VM_MAP_EXEC | VM_MAP_USER)
 #define USER_STACK_PAGES 2ULL
 #define USER_TRAP_STACK_PAGES 2ULL
 #define USER_KERNEL_STACK_PAGES 4ULL
@@ -29,12 +32,6 @@
 extern char __user_start[];
 extern char __user_end[];
 extern void user_demo_start(void);
-extern char user_demo_message_a[];
-extern char user_demo_message_a_end[];
-extern char user_demo_message_b[];
-extern char user_demo_message_b_end[];
-extern char user_demo_message_c[];
-extern char user_demo_message_c_end[];
 extern void riscv_enter_user(uint64_t entry, uint64_t stack_top,
                              uint64_t trap_stack_top, uint64_t arg0,
                              uint64_t arg1, uint64_t arg2, uint64_t arg3);
@@ -56,6 +53,11 @@ static struct user_task_start user_starts[USER_DEMO_TASK_COUNT];
 static struct task idle_task;
 static struct timer_event idle_status_timer;
 static volatile int idle_status_due;
+
+static uint64_t pages_for_size(uint64_t size)
+{
+    return (size + VM_PAGE_SIZE - 1) / VM_PAGE_SIZE;
+}
 
 static const char *task_state_name(enum task_state state)
 {
@@ -141,24 +143,48 @@ static void idle_status_timeout(struct timer_event *event, void *context)
     idle_status_due = 1;
 }
 
-static int map_user_section(struct vm_space *space)
+static int load_user_image(struct vm_space *space, void **image_phys,
+                           uint64_t *image_pages, uint64_t *entry)
 {
-    uint64_t start = (uint64_t)(uintptr_t)__user_start;
-    uint64_t end = (uint64_t)(uintptr_t)__user_end;
+    uint64_t image_start = (uint64_t)(uintptr_t)__user_start;
+    uint64_t image_end = (uint64_t)(uintptr_t)__user_end;
+    uint64_t image_size = image_end - image_start;
+    uint64_t entry_offset = (uint64_t)(uintptr_t)user_demo_start - image_start;
+    uint64_t pages = pages_for_size(image_size);
+    void *phys;
 
-    if (end <= start)
+    if (image_end <= image_start || entry_offset >= image_size)
     {
         printk("User section is empty\r\n");
         return 0;
     }
 
-    if (!vm_identity_map(space, start, end - start,
-                         VM_MAP_READ | VM_MAP_EXEC | VM_MAP_USER))
+    phys = phys_alloc_pages(pages);
+    if (!phys)
     {
-        printk("User section mapping failed\r\n");
+        printk("User image allocation failed\r\n");
         return 0;
     }
 
+    /*
+     * 现在的用户程序仍由内核镜像携带，但运行时先复制到用户地址空间自己的物理页，
+     * 再映射到固定用户 VA。后续 ELF loader 会把“复制整段镜像”替换成按 PT_LOAD
+     * 逐段加载。
+     */
+    memzero(phys, pages * VM_PAGE_SIZE);
+    memcpy(phys, __user_start, image_size);
+
+    if (!vm_map_range(space, USER_TEXT_BASE, (uint64_t)(uintptr_t)phys,
+                      pages * VM_PAGE_SIZE, USER_TEXT_FLAGS))
+    {
+        printk("User section mapping failed\r\n");
+        phys_free_pages(phys, pages);
+        return 0;
+    }
+
+    *image_phys = phys;
+    *image_pages = pages;
+    *entry = USER_TEXT_BASE + entry_offset;
     return 1;
 }
 
@@ -194,18 +220,15 @@ static void user_idle_entry(void *arg)
     }
 }
 
-static uint64_t message_length(char *start, char *end)
-{
-    return (uint64_t)(uintptr_t)(end - start);
-}
-
 static int create_one_user_task(uint64_t index, const char *name,
-                                char *message, uint64_t message_size,
                                 uint64_t sleep_ms, uint64_t repeat_count)
 {
     void *kernel_stack_phys = phys_alloc_pages(USER_KERNEL_STACK_PAGES);
     void *user_stack_phys = phys_alloc_pages(USER_STACK_PAGES);
     void *trap_stack_phys = phys_alloc_pages(USER_TRAP_STACK_PAGES);
+    void *image_phys = 0;
+    uint64_t image_pages = 0;
+    uint64_t user_entry = 0;
     uint64_t kernel_stack_size = USER_KERNEL_STACK_PAGES * VM_PAGE_SIZE;
     uint64_t user_stack_size = USER_STACK_PAGES * VM_PAGE_SIZE;
     uint64_t trap_stack_size = USER_TRAP_STACK_PAGES * VM_PAGE_SIZE;
@@ -247,7 +270,8 @@ static int create_one_user_task(uint64_t index, const char *name,
         return 0;
     }
 
-    if (!map_user_section(&user_vms[index]))
+    if (!load_user_image(&user_vms[index], &image_phys, &image_pages,
+                         &user_entry))
     {
         phys_free_pages(kernel_stack_phys, USER_KERNEL_STACK_PAGES);
         phys_free_pages(user_stack_phys, USER_STACK_PAGES);
@@ -261,25 +285,27 @@ static int create_one_user_task(uint64_t index, const char *name,
                       VM_MAP_READ | VM_MAP_WRITE | VM_MAP_USER))
     {
         printk("User stack mapping failed\r\n");
+        phys_free_pages(image_phys, image_pages);
         phys_free_pages(kernel_stack_phys, USER_KERNEL_STACK_PAGES);
         phys_free_pages(user_stack_phys, USER_STACK_PAGES);
         phys_free_pages(trap_stack_phys, USER_TRAP_STACK_PAGES);
         return 0;
     }
 
-    user_starts[index].entry = (uint64_t)(uintptr_t)user_demo_start;
+    user_starts[index].entry = user_entry;
     user_starts[index].user_stack_top = USER_STACK_TOP;
     user_starts[index].trap_stack_top =
         (uint64_t)(uintptr_t)trap_stack_phys + trap_stack_size;
-    user_starts[index].arg0 = (uint64_t)(uintptr_t)message;
-    user_starts[index].arg1 = message_size;
-    user_starts[index].arg2 = sleep_ms;
-    user_starts[index].arg3 = repeat_count;
+    user_starts[index].arg0 = index;
+    user_starts[index].arg1 = sleep_ms;
+    user_starts[index].arg2 = repeat_count;
+    user_starts[index].arg3 = 0;
 
     if (!task_create(&user_tasks[index], name, kernel_stack_phys,
                      kernel_stack_size, user_task_entry, &user_starts[index]))
     {
         printk("User task create failed\r\n");
+        phys_free_pages(image_phys, image_pages);
         phys_free_pages(kernel_stack_phys, USER_KERNEL_STACK_PAGES);
         phys_free_pages(user_stack_phys, USER_STACK_PAGES);
         phys_free_pages(trap_stack_phys, USER_TRAP_STACK_PAGES);
@@ -314,26 +340,17 @@ static int create_idle_task(void)
 
 int user_demo_run(void)
 {
-    if (!create_one_user_task(0, "user-a", user_demo_message_a,
-                              message_length(user_demo_message_a,
-                                             user_demo_message_a_end),
-                              15, 0))
+    if (!create_one_user_task(0, "user-a", 15, 0))
     {
         return 0;
     }
 
-    if (!create_one_user_task(1, "user-b", user_demo_message_b,
-                              message_length(user_demo_message_b,
-                                             user_demo_message_b_end),
-                              25, 0))
+    if (!create_one_user_task(1, "user-b", 25, 0))
     {
         return 0;
     }
 
-    if (!create_one_user_task(2, "user-c", user_demo_message_c,
-                              message_length(user_demo_message_c,
-                                             user_demo_message_c_end),
-                              35, 8))
+    if (!create_one_user_task(2, "user-c", 35, 8))
     {
         return 0;
     }

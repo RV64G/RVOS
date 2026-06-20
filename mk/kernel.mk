@@ -7,11 +7,14 @@ KERNEL_LINKER          := $(KERNEL_BUILD_DIR)/kernel.lds
 KERNEL_PHYS_BASE ?= 0x80200000
 KERNEL_LDFLAGS   := $(LDFLAGS_BASE)
 KERNEL_SOURCE_DIRS := kernel mm arch/riscv third_party/libfdt
+USER_SOURCE_DIRS := user
 KERNEL_SELFTEST_SRC := kernel/selftest.c
 KERNEL_ELF_C_SRCS  := $(filter-out $(KERNEL_SELFTEST_SRC),$(sort $(foreach dir,$(KERNEL_SOURCE_DIRS),$(wildcard $(dir)/*.c))))
 KERNEL_ELF_S_SRCS  := $(sort $(foreach dir,$(KERNEL_SOURCE_DIRS),$(wildcard $(dir)/*.S)))
+USER_EMBED_S_SRCS  := $(sort $(foreach dir,$(USER_SOURCE_DIRS),$(wildcard $(dir)/*.S)))
 KERNEL_ELF_SRCS    := $(KERNEL_ELF_C_SRCS) $(KERNEL_ELF_S_SRCS)
-KERNEL_ELF_OBJS    := $(addprefix $(KERNEL_BUILD_DIR)/,$(addsuffix .o,$(basename $(KERNEL_ELF_SRCS))))
+KERNEL_EMBED_SRCS  := $(KERNEL_ELF_SRCS) $(USER_EMBED_S_SRCS)
+KERNEL_ELF_OBJS    := $(addprefix $(KERNEL_BUILD_DIR)/,$(addsuffix .o,$(basename $(KERNEL_EMBED_SRCS))))
 KERNEL_ELF_DEPS    := $(KERNEL_ELF_OBJS:.o=.d)
 KERNEL_CLANGD_C_SRCS := $(filter-out third_party/%,$(KERNEL_ELF_C_SRCS))
 
@@ -21,7 +24,7 @@ KERNEL_DEPFLAGS   = -MMD -MP
 KERNEL_TEST_BUILD_DIR := $(BUILD_DIR)/test/kernel
 KERNEL_TEST_ELF       := $(KERNEL_TEST_BUILD_DIR)/kernel.elf
 KERNEL_TEST_C_SRCS    := $(KERNEL_ELF_C_SRCS) $(KERNEL_SELFTEST_SRC)
-KERNEL_TEST_S_SRCS    := $(KERNEL_ELF_S_SRCS)
+KERNEL_TEST_S_SRCS    := $(KERNEL_ELF_S_SRCS) $(USER_EMBED_S_SRCS)
 KERNEL_TEST_SRCS      := $(KERNEL_TEST_C_SRCS) $(KERNEL_TEST_S_SRCS)
 KERNEL_TEST_OBJS      := $(addprefix $(KERNEL_TEST_BUILD_DIR)/,$(addsuffix .o,$(basename $(KERNEL_TEST_SRCS))))
 KERNEL_TEST_DEPS      := $(KERNEL_TEST_OBJS:.o=.d)
