@@ -316,6 +316,43 @@ uart_handle_interrupt()
 这样做的目的，是把慢速串口的等待时间从 `sys_write/printk` 路径里移走。调用者只负责
 把日志交给 ring buffer；真正按波特率慢慢发送的工作，交给 UART 的发送空中断继续推进。
 
+## QEMU 和真机上的差异
+
+这条路径在 QEMU 和开发板上会表现不同。当前代码的 `uart_tx_pump_locked()` 会在
+`LSR.THRE` 仍然为 1 时继续推进 TX ring buffer。这个行为不假定 FIFO 深度，只是相信
+UART 当前给出的状态位。
+
+在真实低速串口上，写入 `THR` 后硬件通常会很快清掉 `LSR.THRE`。例如 115200 baud 下，
+真正把字符推出串口线需要按波特率慢慢完成，所以 `uart_tx_pump_locked()` 往往只能写入
+少量字符，剩余内容留在 TX ring buffer，后续靠 `IER.THRI` 触发的外部中断继续发送。
+这种情况下统计里会看到：
+
+```text
+trap_syscall_max_us 明显下降
+trap_external_count 明显增长
+trap_external_max_us 很小
+```
+
+QEMU 的 16550 后端连接的是虚拟字符设备，不是真实串口线。QEMU 的
+`hw/char/serial.c` 中，guest 写 `THR` 后会清 `LSR.THRE`，随后 `serial_xmit()` 调用
+chardev 写出字符；如果字符被后端接受，QEMU 会重新置 `LSR.THRE`，并在 THR interrupt
+pending 时更新中断状态。也就是说，QEMU 的“串口线”可以由宿主 chardev 很快消费，
+不一定按真实 115200 baud 的节奏让 guest 等待。这样 TX ring buffer 可能在当前
+`sys_write/printk` 路径里被同步推进得更多，甚至直接排空；因为队列空了以后内核会关闭
+`IER.THRI`，所以 QEMU 里不一定能看到很多 UART TX external interrupt，`trap_syscall_max_us`
+也可能继续被输出路径拉高。
+
+因此这组统计要分平台看：
+
+```text
+QEMU       : 适合验证功能路径能跑通，UART 耗时不代表真实 115200 串口。
+真实开发板 : 更适合评估中断输出是否把慢速串口等待移出 syscall 路径。
+```
+
+参考：
+
+- QEMU 16550A UART emulation：<https://github.com/qemu/qemu/blob/master/hw/char/serial.c>
+
 ## 当前哪些是临时的
 
 不是整条链路都是临时的。
