@@ -7,8 +7,10 @@
 static void printk_putchar(int ch)
 {
     if (uart_ready()) {
-        uart_putchar(ch);
-        return;
+        char c = (char)ch;
+        if (uart_write(&c, 1)) {
+            return;
+        }
     }
 
     sbi_console_putchar(ch);
@@ -27,8 +29,19 @@ void printk_init(void)
     }
 }
 
+/* TODO: 异步 UART 输出会让多个 task 的 printk 内容交错；后续需要 printk 层日志锁
+ * 或正式日志队列，保证一条日志记录作为整体入队。 */
 void printk(const char *s)
 {
+    const char *end = s;
+    while (*end) {
+        end++;
+    }
+
+    if (uart_ready() && uart_write(s, (uint64_t)(end - s))) {
+        return;
+    }
+
     while (*s) {
         printk_putchar(*s);
         s++;

@@ -4,7 +4,7 @@
 /**
  * 初始化当前 hart 的外部中断控制器。
  *
- * 第一版只接 PLIC + UART RX，用来验证串口中断输入链路。
+ * 当前接 PLIC + UART：RX 负责输入字符入队，TX empty 负责继续发送 printk 缓冲区。
  */
 int irq_init(void);
 

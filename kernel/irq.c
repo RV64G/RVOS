@@ -134,7 +134,7 @@ int irq_init(void)
         return 0;
     }
 
-    uart_enable_rx_interrupt();
+    uart_enable_interrupts();
     csr_set_sie(SIE_SEIE);
 
     printk("PLIC UART input ready\r\n");
