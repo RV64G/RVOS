@@ -6,15 +6,16 @@ KERNEL_LINKER_TEMPLATE := kernel/kernel.lds
 KERNEL_LINKER          := $(KERNEL_BUILD_DIR)/kernel.lds
 KERNEL_PHYS_BASE ?= 0x80200000
 KERNEL_LDFLAGS   := $(LDFLAGS_BASE)
-KERNEL_SOURCE_DIRS := kernel mm arch/riscv
+KERNEL_SOURCE_DIRS := kernel mm arch/riscv third_party/libfdt
 KERNEL_SELFTEST_SRC := kernel/selftest.c
 KERNEL_ELF_C_SRCS  := $(filter-out $(KERNEL_SELFTEST_SRC),$(sort $(foreach dir,$(KERNEL_SOURCE_DIRS),$(wildcard $(dir)/*.c))))
 KERNEL_ELF_S_SRCS  := $(sort $(foreach dir,$(KERNEL_SOURCE_DIRS),$(wildcard $(dir)/*.S)))
 KERNEL_ELF_SRCS    := $(KERNEL_ELF_C_SRCS) $(KERNEL_ELF_S_SRCS)
 KERNEL_ELF_OBJS    := $(addprefix $(KERNEL_BUILD_DIR)/,$(addsuffix .o,$(basename $(KERNEL_ELF_SRCS))))
 KERNEL_ELF_DEPS    := $(KERNEL_ELF_OBJS:.o=.d)
+KERNEL_CLANGD_C_SRCS := $(filter-out third_party/%,$(KERNEL_ELF_C_SRCS))
 
-KERNEL_ELF_CFLAGS = $(CFLAGS_BASE) $(INCLUDES) -Ikernel -Imm -Iarch/riscv $(CFLAGS_WARN)
+KERNEL_ELF_CFLAGS = $(CFLAGS_BASE) $(INCLUDES) -Ikernel -Imm -Iarch/riscv -Ithird_party/libfdt $(CFLAGS_WARN)
 KERNEL_DEPFLAGS   = -MMD -MP
 
 KERNEL_TEST_BUILD_DIR := $(BUILD_DIR)/test/kernel

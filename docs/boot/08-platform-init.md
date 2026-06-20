@@ -18,6 +18,31 @@ kernel_entry()
   -> printk_init()：用 platform_info.uart_base 初始化 UART backend。
 ```
 
+## DTB 解析边界
+
+DTB 文件本身是 Flattened Device Tree：header、structure block、strings block 都有
+固定二进制格式。内核不再手写这层格式解析，而是使用 `third_party/libfdt` 里的只读
+接口完成这些工作：
+
+- 校验 FDT header；
+- 遍历节点；
+- 查找属性；
+- 处理大端 cell 和字符串表。
+
+`kernel/dtb.c` 只保留“平台语义”这一层：从已经遍历出来的节点里提取当前内核需要的
+字段，然后写入 `platform_info`。目前会提取：
+
+- 根节点 `model`；
+- CPU `timebase-frequency`；
+- 启动 hart 对应的 `riscv,cpu-intc` phandle；
+- UART 的 `reg`、`reg-shift`、`reg-io-width` 和 `interrupts`；
+- PLIC/AIA 节点的 `reg`；
+- PLIC `interrupts-extended` 中和启动 hart S-mode external interrupt 对应的 context。
+
+这样划分以后，FDT 格式正确性由成熟库负责；内核自己的代码只表达“RVOS 当前需要哪些
+硬件事实”。后续新增 watchdog、framebuffer 或更多串口兼容项时，也应该继续沿用这个
+边界：不要重新解析 token，只增加平台字段抽取逻辑。
+
 ## 为什么 DTB 后还要映射 MMIO
 
 `early_vm_enable()` 只映射启动后立即需要的内存：

@@ -87,7 +87,7 @@ compile-commands:
 		--directory "$(CURDIR)" \
 		--cc "$(CC)" \
 		--kernel-cflags '$(KERNEL_ELF_CFLAGS)' \
-		--kernel-sources '$(KERNEL_ELF_C_SRCS)' \
+		--kernel-sources '$(KERNEL_CLANGD_C_SRCS)' \
 		--efi-cflags '$(EFI_CFLAGS)' \
 		--efi-sources '$(EFI_APP_SRCS) $(EFI_RISCV_SRCS)'
 	@echo "Generated compile_commands.json"
@@ -118,7 +118,10 @@ wall:
 	@echo "This will treat warnings as errors and log output to wall_warnings.log"
 	@echo "-----------------------------------------------------------------------"
 	@$(MAKE) clean > /dev/null
-	@($(MAKE) -k all CFLAGS_WARN="$(CFLAGS_WARN_STRICT)" > wall_warnings.log 2>&1) || true
+	@$(MAKE) -k all CFLAGS_WARN="$(CFLAGS_WARN_STRICT)" > wall_warnings.log 2>&1 || { \
+		echo "Strict compilation failed. See wall_warnings.log"; \
+		exit 1; \
+	}
 	@echo "Strict compilation finished. Check wall_warnings.log for details."
 
 .PHONY: all clean run wall code txt toolchain check-undef check-selftest-undef test-build test-qemu test compile-commands tftp-sync tftp-serve size
