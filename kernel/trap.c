@@ -1,6 +1,7 @@
 #include "trap.h"
 
 #include "compile_check.h"
+#include "console.h"
 #include "csr.h"
 #include "early_log.h"
 #include "irq.h"
@@ -199,5 +200,6 @@ struct trap_frame *trap_handle(struct trap_frame *frame)
         trap_stop(outcome.reason, frame);
     }
 
+    console_drain_input();
     return sched_from_trap(frame);
 }

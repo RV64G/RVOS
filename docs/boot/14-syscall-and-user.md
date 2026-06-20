@@ -17,14 +17,17 @@ U-mode 程序
 
 ```text
 kernel_entry()
-  -> user_demo_run()：准备最小用户地址空间、用户 section、用户栈和用户 trap 栈。
-     -> vm_space_create()：创建 user_demo_vm。
-     -> vm_copy_kernel_mappings()：复制内核 S-mode 映射，不继承 U-mode 映射。
-     -> map_user_section()：把 .user section 映射到 user_demo_vm，权限为 U/R/X。
-     -> phys_alloc_pages()：分配用户栈和 U-mode trap 栈。
-     -> vm_map_range()：把用户栈映射到 user_demo_vm 的用户虚拟地址。
-     -> vm_activate_sv39()：切到 user_demo_vm。
-     -> riscv_enter_user()：设置 sepc/sstatus/sscratch，然后 sret 到 U-mode。
+  -> user_demo_run()：创建几个最小用户 task。
+     -> create_one_user_task()：为每个 task 准备用户页表、用户栈、trap 栈和内核启动栈。
+        -> vm_space_create()：创建独立用户页表。
+        -> vm_copy_kernel_mappings()：复制内核 S-mode 映射，不继承 U-mode 映射。
+        -> map_user_section()：把同一段 .user section 映射进用户页表，权限为 U/R/X。
+        -> vm_map_range()：把本 task 的用户栈映射到用户虚拟地址。
+        -> task_create()：创建内核调度对象，第一次运行时跳到 user_task_entry()。
+     -> create_idle_task()：创建最小 idle task，所有用户 task sleep/exit 后仍有执行流。
+     -> sched_start_first()：boot task 退场，调度第一个 READY task。
+  -> user_task_entry()
+     -> riscv_enter_user()：设置 sepc/sstatus/sscratch 和初始 a0/a1/a2，然后 sret 到 U-mode。
 ```
 
 用户程序执行：
@@ -32,6 +35,8 @@ kernel_entry()
 ```text
 user_demo_start()
   -> ecall write
+  -> ecall sched_yield
+  -> ecall sleep_ms
   -> ecall exit
 ```
 
@@ -117,9 +122,14 @@ a0      : 返回值
 已接入：
 
 ```text
-write = 64
-exit  = 93
+write       = 64
+exit        = 93
+sched_yield = 124
+sleep_ms    = 1000
 ```
+
+`sleep_ms` 是当前 demo 用的临时 syscall，不是 Linux ABI。Linux 风格的 sleep 通常会走
+`nanosleep` 或 `clock_nanosleep`，参数来自用户态 `timespec`。
 
 `ecall` 是固定 32-bit 指令。syscall 处理完后必须执行：
 
@@ -128,6 +138,39 @@ sepc += 4
 ```
 
 否则 `sret` 回到用户态后会再次执行同一条 `ecall`。
+
+## syscall 中为什么只请求调度
+
+用户态 `sched_yield` 和 `sleep_ms` 都不会在 `syscall_handle()` 里直接调用
+`context_switch()`。原因是 syscall handler 此时运行在 trap 路径里：
+
+```text
+U-mode
+  -> ecall
+  -> trap.S 已经把完整用户现场保存成 trap_frame
+  -> syscall_handle()
+```
+
+如果这时直接走普通 `context_switch()`，只能保存 C ABI 里的 callee-saved 寄存器，和
+当前已经压好的 `trap_frame` 不是同一种现场。更自然的做法是：
+
+```text
+sys_yield/sys_sleep/sys_exit
+  -> 改当前 task 状态
+  -> sched_request_reschedule()
+trap_handle() 返回前
+  -> sched_from_trap(frame)
+  -> 保存 current->trap_frame
+  -> 返回 next->trap_frame 给 trap.S
+trap.S
+  -> 恢复 next 的完整现场
+  -> sret
+```
+
+`sched_request_reschedule()` 现在只是设置一个调度请求标志。它不是最终的 SMP 设计，只是
+当前单 hart 阶段的最小实现：把“某个事件要求切换 task”和“真正恢复哪个 trap frame”
+分开。后续做多核时，这个标志需要变成 per-hart 状态，不能继续用一个全局变量表达所有
+CPU 的调度请求。
 
 ## 用户指针复制
 

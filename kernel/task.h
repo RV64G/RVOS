@@ -72,12 +72,30 @@ int task_create(
 void task_yield(void);
 
 /**
+ * 请求当前 task 在 trap 返回前让出 CPU。
+ *
+ * 用户态 syscall 不能直接走 context_switch()，因为当前执行流还在 trap 栈上。这个
+ * 接口只设置调度请求，真正切换发生在 trap.S 恢复现场之前。
+ */
+void task_yield_from_trap(void);
+
+/**
  * 阻塞当前 task，直到指定毫秒数后被 timer 唤醒。
  *
  * 当前实现要求还有其它 READY task 可以运行；正式 idle task 出现前，不应该让系统里
  * 唯一的可运行 task sleep。
  */
 int task_sleep_ms(uint64_t milliseconds);
+
+/**
+ * 在 trap 返回路径上阻塞当前 task，直到指定毫秒数后被 timer 唤醒。
+ */
+int task_sleep_ms_from_trap(uint64_t milliseconds);
+
+/**
+ * 把当前 task 标记为 ZOMBIE，并请求 trap 返回前切到其它 READY task。
+ */
+void task_exit_from_trap(void);
 
 /**
  * 把 BLOCKED task 唤醒并重新放回 run queue。

@@ -19,6 +19,28 @@ static void task_sleep_timeout(struct timer_event *event, void *context)
     task_wake((struct task *)context);
 }
 
+static int block_current_for_sleep(uint64_t milliseconds)
+{
+    struct task *task = sched_current();
+    if (!task || task->state != TASK_RUNNING)
+    {
+        return 0;
+    }
+
+    /*
+     * sleep_timer 嵌在 task 里，timer 中断到期时不需要分配或释放节点，只把对应
+     * task 从 BLOCKED 改回 READY。
+     */
+    task->state = TASK_BLOCKED;
+    if (!timer_schedule_ms(&task->sleep_timer, milliseconds, 0))
+    {
+        task->state = TASK_RUNNING;
+        return 0;
+    }
+
+    return 1;
+}
+
 static void task_trampoline(void)
 {
     struct task *task = sched_current();
@@ -112,27 +134,43 @@ void task_yield(void)
     sched_yield();
 }
 
+void task_yield_from_trap(void)
+{
+    sched_request_reschedule();
+}
+
 int task_sleep_ms(uint64_t milliseconds)
 {
-    struct task *task = sched_current();
-    if (!task || task->state != TASK_RUNNING)
+    if (!block_current_for_sleep(milliseconds))
     {
-        return 0;
-    }
-
-    /*
-     * sleep_timer 嵌在 task 里，timer 中断到期时不需要分配或释放节点，只把对应
-     * task 从 BLOCKED 改回 READY。
-     */
-    task->state = TASK_BLOCKED;
-    if (!timer_schedule_ms(&task->sleep_timer, milliseconds, 0))
-    {
-        task->state = TASK_RUNNING;
         return 0;
     }
 
     sched_yield();
     return 1;
+}
+
+int task_sleep_ms_from_trap(uint64_t milliseconds)
+{
+    if (!block_current_for_sleep(milliseconds))
+    {
+        return 0;
+    }
+
+    sched_request_reschedule();
+    return 1;
+}
+
+void task_exit_from_trap(void)
+{
+    struct task *task = sched_current();
+    if (!task)
+    {
+        return;
+    }
+
+    task->state = TASK_ZOMBIE;
+    sched_request_reschedule();
 }
 
 void task_wake(struct task *task)
@@ -144,6 +182,16 @@ void task_wake(struct task *task)
 
     task->state = TASK_READY;
     sched_enqueue(task);
+
+    /*
+     * 用户态/idle 路径可以在 trap 返回前直接切到被唤醒 task；纯内核 task 仍靠
+     * context_switch() 保存的 context 恢复，不能用旧的 initial trap_frame 重启。
+     */
+    struct task *current = sched_current();
+    if (current && current->trap_frame)
+    {
+        sched_request_reschedule();
+    }
 }
 
 struct task *task_current(void)

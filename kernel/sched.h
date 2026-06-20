@@ -22,6 +22,14 @@ void sched_reset(void);
 void sched_enqueue(struct task *task);
 
 /**
+ * 从 boot task 启动第一个 READY task，但不把 boot task 放回运行队列。
+ *
+ * 用户态 demo 使用这个入口把 CPU 交给调度器；后续没有 wait/reaper 前，boot task
+ * 不参与用户 task 的 trap-frame 调度。
+ */
+void sched_start_first(void);
+
+/**
  * 主动让出 CPU。
  *
  * 这是内核 task 的协作式调度入口，底层走 context_switch()。

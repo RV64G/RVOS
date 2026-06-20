@@ -76,6 +76,21 @@ void sched_enqueue(struct task *task)
     task->queued = 1;
 }
 
+void sched_start_first(void)
+{
+    struct task *old = current_task;
+    struct task *next = pick_next_task();
+    if (!old || !next)
+    {
+        return;
+    }
+
+    next->state = TASK_RUNNING;
+    switch_task_vm(old, next);
+    current_task = next;
+    context_switch(&old->context, &next->context);
+}
+
 void sched_yield(void)
 {
     struct task *old = current_task;
