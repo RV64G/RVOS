@@ -9,8 +9,8 @@ extern char __kernel_text_start[];
 extern char __kernel_text_end[];
 extern char __kernel_rodata_start[];
 extern char __kernel_rodata_end[];
-extern char __user_start[];
-extern char __user_end[];
+extern char __user_elf_start[];
+extern char __user_elf_end[];
 extern char __kernel_data_start[];
 extern char __kernel_data_end[];
 extern char __kernel_bss_start[];
@@ -47,13 +47,13 @@ static int map_kernel_sections(void)
     }
 
     /*
-     * .user 现在只是内核 ELF 携带的用户程序载荷。S-mode 内核需要读取它并复制到
-     * 用户地址空间，但不应该直接执行这段代码。
+     * .user_elf 是内核 ELF 携带的用户程序文件。S-mode 内核只需要读取它，再交给
+     * ELF loader 复制到用户地址空间。
      */
     if (!vm_identity_map(
             &kernel_vm,
-            (uint64_t)(uintptr_t)__user_start,
-            (uint64_t)(__user_end - __user_start),
+            (uint64_t)(uintptr_t)__user_elf_start,
+            (uint64_t)(__user_elf_end - __user_elf_start),
             VM_MAP_READ)) {
         return 0;
     }

@@ -1,7 +1,7 @@
-# Syscall 与最小用户态
+# Syscall、用户 ELF 与最小用户态
 
-这一页说明当前第一条用户态闭环。它还不是完整进程模型，也没有从文件系统加载 ELF；
-目标是先证明：
+这一页说明当前第一条用户态闭环。它还不是完整进程模型，也没有从文件系统读取用户
+程序；目标是先证明：
 
 ```text
 U-mode 程序
@@ -21,23 +21,25 @@ kernel_entry()
      -> create_one_user_task()：为每个 task 准备用户页表、用户栈、trap 栈和内核启动栈。
         -> vm_space_create()：创建独立用户页表。
         -> vm_copy_kernel_mappings()：复制内核 S-mode 映射，不继承 U-mode 映射。
-        -> map_user_section()：把同一段 .user section 映射进用户页表，权限为 U/R/X。
+        -> load_user_image()
+           -> user_elf_load()：解析内核携带的 hello.elf blob，按 PT_LOAD 建立用户映射。
         -> vm_map_range()：把本 task 的用户栈映射到用户虚拟地址。
         -> task_create()：创建内核调度对象，第一次运行时跳到 user_task_entry()。
      -> create_idle_task()：创建最小 idle task，所有用户 task sleep/exit 后仍有执行流。
      -> sched_start_first()：boot task 退场，调度第一个 READY task。
   -> user_task_entry()
-     -> riscv_enter_user()：设置 sepc/sstatus/sscratch 和初始 a0/a1/a2，然后 sret 到 U-mode。
+     -> riscv_enter_user()：设置 sepc/sstatus/sscratch 和初始 a0/a1/a2/a3，然后 sret 到 U-mode。
 ```
 
 用户程序执行：
 
 ```text
-user_demo_start()
+build/user/hello.elf::_start()
+  -> ecall sleep_ms(startup_delay_ms)
   -> ecall write
   -> ecall sched_yield
-  -> ecall sleep_ms
-  -> ecall exit
+  -> ecall sleep_ms(loop_delay_ms)
+  -> ecall exit，可选
 ```
 
 trap 返回路径：
@@ -52,26 +54,46 @@ trap_vector()
   -> sret
 ```
 
-## .user section
+## 内嵌用户 ELF
 
-当前用户程序直接链接进 kernel ELF 的 `.user` section。链接脚本把这个 section 独立按
-页对齐，原因是 RISC-V 页表的用户权限是按页生效的：
+当前还没有文件系统，所以用户程序先作为独立 ELF 构建，再作为 blob 嵌进 kernel ELF：
 
 ```text
-.text/.rodata/.data/.bss : 内核权限
-.user                    : U/R/X，允许 U-mode 取指和读取常量
+user/hello.S
+  -> build/user/hello.elf
+  -> build/user/hello_blob.S
+  -> build/user/hello_blob.o
+  -> kernel ELF 的 .user_elf section
 ```
 
-这不是最终程序加载方案。后续 ELF loader 出现后，用户程序会来自文件系统，`.user`
-section 可以退化成测试或早期 bring-up 用例。
+`.user_elf` 只是一段只读数据，供内核中的 `user_elf_load()` 读取。它本身不会直接映射
+成用户代码页；真正进入用户态前，loader 会解析 ELF header 和 program header，把
+`PT_LOAD` 描述的内容复制到新申请的物理页，再映射进目标 task 的用户页表。
 
-当前 `.user` section 中只放一个很小的用户入口。它不走 C 运行时，也不依赖用户
-libc，只是直接按 Linux RISC-V syscall ABI 发起 `write` 和 `exit`，用来验证 U-mode
-入口、trap 换栈和 syscall 分发。
+当前 loader 只支持这条最小路径：
 
-`.user` 不再映射进 `kernel_vm_space()`。当前 demo 会创建一张独立的
-`user_demo_vm`，先复制必要的内核映射，再只在这张用户页表里加入 `.user` 和用户栈。
-这仍然不是完整进程地址空间，但已经不再和 boot task 共用同一张根页表。
+```text
+ELF64
+little-endian
+ET_EXEC
+EM_RISCV
+PT_LOAD
+```
+
+为了先把执行链路跑通，当前会先计算所有 `PT_LOAD` 的总虚拟地址范围，再统一申请一段
+连续物理页，并把这段范围整体映射成 U/R/W/X。这样能避开“两个段落在同一页内，逐段
+申请会互相冲突”的问题。后续 loader 需要按 segment flags 拆分权限，至少做到代码页
+不可写、只读数据页不可写。
+
+用户程序仍然不走 C 运行时，也不依赖用户 libc，只是直接按 RISC-V syscall ABI 发起
+`write`、`sched_yield`、`sleep_ms` 和 `exit`。当前创建三个 task，传入不同启动延迟：
+
+```text
+user-a: 启动后 sleep 0.3s，每轮 sleep 1s，持续运行
+user-b: 启动后 sleep 0.6s，每轮 sleep 1s，持续运行
+user-c: 启动后 sleep 0.9s，每轮 sleep 1s，运行 8 轮后 exit
+idle  : 每 2s 打印一次 task 状态和 trap 统计
+```
 
 ## 用户栈和 trap 栈
 
@@ -195,13 +217,15 @@ CPU 的调度请求。
 
 ## 当前边界
 
-当前已经证明 U-mode 能通过 `ecall` 进入内核并调用 `write/exit`。还没有实现：
+当前已经证明 U-mode 能通过 `ecall` 进入内核并调用 `write/yield/sleep/exit`，也已经能
+从一个内嵌 ELF blob 创建多个独立用户 task。还没有实现：
 
-- 用户 task / PCB 生命周期。
 - 完整用户地址空间布局和销毁路径。
-- ELF 用户程序加载。
+- 从文件系统读取 ELF。
+- `exec` 替换进程映像。
+- 按 ELF segment flags 精细设置页权限。
 - `read/open/close/fork/exec/wait`。
 - 用户异常隔离和进程回收。
 
-下一步如果继续沿着用户态主线推进，优先级应该是用户 task 生命周期、用户地址空间销毁、
-用户栈/程序映射所有权，再到 ELF loader 和文件系统。
+这条路径现在的意义是把用户态、syscall、trap 返回、timer sleep 和调度器串起来，为后续
+文件系统和 `exec` 提供一个可以替换输入来源的加载入口。

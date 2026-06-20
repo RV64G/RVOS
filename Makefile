@@ -18,11 +18,12 @@ QEMU_TEST_LOG ?= $(BUILD_DIR)/test/qemu-selftest.log
 QEMU_TEST_TIMEOUT ?= 90
 QEMU_TEST_MARKER ?= Kernel selftest passed
 
+include mk/user.mk
 include mk/kernel.mk
 include mk/efi.mk
 
 # --- Targets ---
-all: efi kernel
+all: efi kernel user-elf
 	@echo "Build completed successfully"
 	@echo "Default artifacts:"
 	@echo "  - $(EFI_BOOT_APP) : RISC-V UEFI application"

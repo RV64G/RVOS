@@ -30,12 +30,9 @@ SECTIONS
     __kernel_rodata_end = .;
 
     . = ALIGN(0x1000);
-    __user_start = .;
-    .user : {
-        KEEP(*(.user .user.*))
+    .user_elf : {
+        KEEP(*(.user_elf))
     }
-    . = ALIGN(0x1000);
-    __user_end = .;
 
     . = ALIGN(0x1000);
     __kernel_data_start = .;
