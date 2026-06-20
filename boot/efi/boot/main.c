@@ -127,6 +127,14 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, efi_system_table_t *system_table)
 
     update_boot_info_memory_map(boot_info, &memory_map);
 
+#if EFI_SKIP_EXIT_BOOT_SERVICES
+    /*
+     * LPi3A 当前 U-Boot 在 ExitBootServices() 内部触发 Load access fault。这个开关只
+     * 用于上板定位后续内核路径：不调用任何 EFI 服务，直接把控制权交给内核。
+     * 正式启动仍应走 ExitBootServices()，否则不符合 UEFI OS loader 约定。
+     */
+    efi_puts(system_table, L"ExitBootServices: skipped by build flag\r\n");
+#else
     status = system_table->boot_services->exit_boot_services(
         image_handle,
         memory_map.map_key
@@ -138,6 +146,7 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, efi_system_table_t *system_table)
         efi_free_pages(system_table, boot_info, boot_info_pages);
         return status;
     }
+#endif
 
     /*
      * RISC-V 只有通用寄存器 sp，没有单独的“栈基址寄存器”。这里保存低地址基址，

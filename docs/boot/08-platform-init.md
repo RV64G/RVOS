@@ -18,6 +18,31 @@ kernel_entry()
   -> printk_init()：用 platform_info.uart_base 初始化 UART backend。
 ```
 
+## DTB 解析边界
+
+DTB 文件本身是 Flattened Device Tree：header、structure block、strings block 都有
+固定二进制格式。内核不再手写这层格式解析，而是使用 `third_party/libfdt` 里的只读
+接口完成这些工作：
+
+- 校验 FDT header；
+- 遍历节点；
+- 查找属性；
+- 处理大端 cell 和字符串表。
+
+`kernel/dtb.c` 只保留“平台语义”这一层：从已经遍历出来的节点里提取当前内核需要的
+字段，然后写入 `platform_info`。目前会提取：
+
+- 根节点 `model`；
+- CPU `timebase-frequency`；
+- 启动 hart 对应的 `riscv,cpu-intc` phandle；
+- UART 的 `reg`、`reg-shift`、`reg-io-width` 和 `interrupts`；
+- PLIC/AIA 节点的 `reg`；
+- PLIC `interrupts-extended` 中和启动 hart S-mode external interrupt 对应的 context。
+
+这样划分以后，FDT 格式正确性由成熟库负责；内核自己的代码只表达“RVOS 当前需要哪些
+硬件事实”。后续新增 watchdog、framebuffer 或更多串口兼容项时，也应该继续沿用这个
+边界：不要重新解析 token，只增加平台字段抽取逻辑。
+
 ## 为什么 DTB 后还要映射 MMIO
 
 `early_vm_enable()` 只映射启动后立即需要的内存：
@@ -30,7 +55,7 @@ kernel_entry()
 - EFI conventional memory 中整理出的可用物理内存。
 
 UART 和 PLIC 属于设备 MMIO，不属于 EFI conventional memory。如果直接在开启 MMU 后
-访问 `0x10000000` 这样的 UART 地址，页表里没有对应 PTE，就会触发访问异常。当前
+访问 DTB 中记录的 UART/PLIC MMIO 地址，页表里没有对应 PTE，就会触发访问异常。当前
 trap 还没正式接管，所以表现通常是没有后续输出或直接卡住。
 
 因此顺序必须是：
@@ -52,13 +77,32 @@ trap 还没正式接管，所以表现通常是没有后续输出或直接卡住
 
 ## 当前 UART 实现范围
 
-当前 UART 驱动只实现 ns16550 兼容设备的最小发送路径：
+当前 UART 驱动已经覆盖 ns16550 兼容设备的最小收发路径，并把正式 `printk` 从纯轮询
+输出推进到 TX ring buffer + 发送中断。
 
-- 等待 `LSR.THRE` 表示发送保持寄存器为空；
-- 写 `THR` 输出一个字符；
+输出路径：
+
+- 中断尚未打开时，`printk` 仍然用 `uart_putchar()` 轮询输出，保证早期日志不丢；
+- UART/PLIC 初始化完成后，`printk` 把字符串写入 TX ring buffer；
+- `uart_write()` 只主动 kick 一次当前已经可写的 `THR`，不等待后续字节全部发完；
+- 后续 `THR` 再次变空时，UART 通过 `IER.THRI` 触发外部中断；
+- `uart_handle_interrupt()` 从 TX ring buffer 继续取字符写入 `THR`；
+- TX ring buffer 为空后关闭 `IER.THRI`，避免空发送寄存器反复触发中断。
+
+输入路径：
+
+- 通过 `IER.RDI` 打开 UART 接收中断；
+- 外部中断经 PLIC 进入统一 trap；
+- `uart_handle_interrupt()` 读取 `RBR`，把字符放进 console input buffer。
+
+保留轮询输出函数不是倒退。`uart_putchar()` 仍然服务于两个场景：UART 中断还没打开的
+早期阶段，以及 TX ring buffer 极端满载时的兜底推进。正常 `printk` 路径应该走
+`uart_write()`。
+
+它仍然不是完整串口驱动：
+
 - 不重新配置波特率；
-- 不开启 UART 中断；
-- 不处理输入。
+- 不配置 FIFO 触发水位；
+- 不实现 tty 行规程、阻塞 read 或信号；
 
-这足够让内核在 QEMU 和当前开发板启动阶段接管日志输出。完整串口驱动后续可以继续
-扩展 FIFO、中断输入和控制台抽象。
+串口输入链路见 [12 IRQ 与串口输入](12-irq-console-input.md)。

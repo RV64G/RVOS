@@ -57,7 +57,8 @@ EFI_STATUS efi_load_kernel_elf(
  * @param stack_top 初始内核栈顶，RISC-V 栈向低地址增长。
  * @param boot_info 传给 kernel_entry() 的启动信息指针。
  *
- * RISC-V 实现会切换 sp、把 boot_info 放入 a0、清 satp，然后用 jump 交出控制权。
+ * RISC-V 实现会切换 sp、把 boot_info 放入 a0，然后用 jump 交出控制权。固件页表
+ * 由 kernel_entry() 在进入内核镜像后关闭，避免 EFI 镜像本身依赖当前页表时出错。
  * 成功路径不返回 EFI loader。
  */
 void jump_to_kernel(

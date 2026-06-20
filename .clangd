@@ -1,0 +1,8 @@
+---
+# third_party 目录保存外部代码。它参与构建，但不按本项目的 LSP 诊断策略处理。
+# 这样 clangd 仍能索引符号，打开内核代码时也能跳转到 libfdt；直接打开第三方源码时，
+# 不会把外部宏/风格细节当成 RVOS 自己要处理的报错。
+If:
+  PathMatch: third_party/.*
+Diagnostics:
+  Suppress: '*'

@@ -1,28 +1,89 @@
 #include "trap.h"
 
+#include "compile_check.h"
+#include "console.h"
 #include "csr.h"
 #include "early_log.h"
+#include "irq.h"
 #include "printk.h"
+#include "riscv/sbi.h"
+#include "sched.h"
+#include "syscall.h"
 #include "timer.h"
+#include "trap_frame_offsets.h"
 
 #define SCAUSE_INTERRUPT (1ULL << 63)
 #define SCAUSE_CODE_MASK (~SCAUSE_INTERRUPT)
 
 #define SCAUSE_SUPERVISOR_SOFTWARE_INTERRUPT 1ULL
-#define SCAUSE_SUPERVISOR_TIMER_INTERRUPT    5ULL
+#define SCAUSE_SUPERVISOR_TIMER_INTERRUPT 5ULL
 #define SCAUSE_SUPERVISOR_EXTERNAL_INTERRUPT 9ULL
 
 #define SCAUSE_ILLEGAL_INSTRUCTION 2ULL
-#define SCAUSE_BREAKPOINT          3ULL
-#define SCAUSE_LOAD_ACCESS_FAULT   5ULL
-#define SCAUSE_STORE_ACCESS_FAULT  7ULL
-#define SCAUSE_USER_ECALL          8ULL
-#define SCAUSE_SUPERVISOR_ECALL    9ULL
-#define SCAUSE_INST_PAGE_FAULT     12ULL
-#define SCAUSE_LOAD_PAGE_FAULT     13ULL
-#define SCAUSE_STORE_PAGE_FAULT    15ULL
+#define SCAUSE_BREAKPOINT 3ULL
+#define SCAUSE_LOAD_ACCESS_FAULT 5ULL
+#define SCAUSE_STORE_ACCESS_FAULT 7ULL
+#define SCAUSE_USER_ECALL 8ULL
+#define SCAUSE_SUPERVISOR_ECALL 9ULL
+#define SCAUSE_INST_PAGE_FAULT 12ULL
+#define SCAUSE_LOAD_PAGE_FAULT 13ULL
+#define SCAUSE_STORE_PAGE_FAULT 15ULL
 
 extern void trap_vector(void);
+
+static struct trap_stats current_trap_stats;
+
+enum trap_result
+{
+    TRAP_HANDLED,
+    TRAP_FATAL,
+};
+
+struct trap_outcome
+{
+    enum trap_result result;
+    const char *reason;
+};
+
+CHECK_STRUCT_OFFSET(struct trap_frame, ra, TRAP_FRAME_RA);
+CHECK_STRUCT_OFFSET(struct trap_frame, sp, TRAP_FRAME_SP);
+CHECK_STRUCT_OFFSET(struct trap_frame, gp, TRAP_FRAME_GP);
+CHECK_STRUCT_OFFSET(struct trap_frame, tp, TRAP_FRAME_TP);
+CHECK_STRUCT_OFFSET(struct trap_frame, t0, TRAP_FRAME_T0);
+CHECK_STRUCT_OFFSET(struct trap_frame, t1, TRAP_FRAME_T1);
+CHECK_STRUCT_OFFSET(struct trap_frame, t2, TRAP_FRAME_T2);
+CHECK_STRUCT_OFFSET(struct trap_frame, s0, TRAP_FRAME_S0);
+CHECK_STRUCT_OFFSET(struct trap_frame, s1, TRAP_FRAME_S1);
+CHECK_STRUCT_OFFSET(struct trap_frame, a0, TRAP_FRAME_A0);
+CHECK_STRUCT_OFFSET(struct trap_frame, a1, TRAP_FRAME_A1);
+CHECK_STRUCT_OFFSET(struct trap_frame, a2, TRAP_FRAME_A2);
+CHECK_STRUCT_OFFSET(struct trap_frame, a3, TRAP_FRAME_A3);
+CHECK_STRUCT_OFFSET(struct trap_frame, a4, TRAP_FRAME_A4);
+CHECK_STRUCT_OFFSET(struct trap_frame, a5, TRAP_FRAME_A5);
+CHECK_STRUCT_OFFSET(struct trap_frame, a6, TRAP_FRAME_A6);
+CHECK_STRUCT_OFFSET(struct trap_frame, a7, TRAP_FRAME_A7);
+CHECK_STRUCT_OFFSET(struct trap_frame, s2, TRAP_FRAME_S2);
+CHECK_STRUCT_OFFSET(struct trap_frame, s3, TRAP_FRAME_S3);
+CHECK_STRUCT_OFFSET(struct trap_frame, s4, TRAP_FRAME_S4);
+CHECK_STRUCT_OFFSET(struct trap_frame, s5, TRAP_FRAME_S5);
+CHECK_STRUCT_OFFSET(struct trap_frame, s6, TRAP_FRAME_S6);
+CHECK_STRUCT_OFFSET(struct trap_frame, s7, TRAP_FRAME_S7);
+CHECK_STRUCT_OFFSET(struct trap_frame, s8, TRAP_FRAME_S8);
+CHECK_STRUCT_OFFSET(struct trap_frame, s9, TRAP_FRAME_S9);
+CHECK_STRUCT_OFFSET(struct trap_frame, s10, TRAP_FRAME_S10);
+CHECK_STRUCT_OFFSET(struct trap_frame, s11, TRAP_FRAME_S11);
+CHECK_STRUCT_OFFSET(struct trap_frame, t3, TRAP_FRAME_T3);
+CHECK_STRUCT_OFFSET(struct trap_frame, t4, TRAP_FRAME_T4);
+CHECK_STRUCT_OFFSET(struct trap_frame, t5, TRAP_FRAME_T5);
+CHECK_STRUCT_OFFSET(struct trap_frame, t6, TRAP_FRAME_T6);
+CHECK_STRUCT_OFFSET(struct trap_frame, sepc, TRAP_FRAME_SEPC);
+CHECK_STRUCT_OFFSET(struct trap_frame, sstatus, TRAP_FRAME_SSTATUS);
+CHECK_STRUCT_OFFSET(struct trap_frame, scause, TRAP_FRAME_SCAUSE);
+CHECK_STRUCT_OFFSET(struct trap_frame, stval, TRAP_FRAME_STVAL);
+CHECK_STRUCT_OFFSET(struct trap_frame, reserved, TRAP_FRAME_RESERVED);
+CHECK_STRUCT_SIZE(struct trap_frame, TRAP_FRAME_SIZE);
+_Static_assert((TRAP_FRAME_SIZE % 16) == 0,
+               "trap_frame size must preserve stack alignment");
 
 static void print_trap_frame(const char *title, const struct trap_frame *frame)
 {
@@ -40,88 +101,197 @@ static void trap_stop(const char *reason, const struct trap_frame *frame)
     early_halt_forever();
 }
 
+static struct trap_outcome trap_handled(void)
+{
+    struct trap_outcome outcome = {
+        .result = TRAP_HANDLED,
+        .reason = 0,
+    };
+    return outcome;
+}
+
+static struct trap_outcome trap_fatal(const char *reason)
+{
+    struct trap_outcome outcome = {
+        .result = TRAP_FATAL,
+        .reason = reason,
+    };
+    return outcome;
+}
+
+static void update_trap_stat(uint64_t *count, uint64_t *max_cycles,
+                             uint64_t elapsed_cycles)
+{
+    (*count)++;
+    if (elapsed_cycles > *max_cycles)
+    {
+        *max_cycles = elapsed_cycles;
+    }
+}
+
 void trap_init(void)
 {
     /*
      * stvec 的低两位是模式位。这里传入自然对齐的函数地址，低两位为 0，
      * 表示 Direct 模式：所有异常和中断先进入同一个 trap_vector。
      */
+    csr_write_sscratch(0);
     csr_write_stvec((uint64_t)trap_vector);
+    current_trap_stats.total_count = 0;
+    current_trap_stats.total_max_cycles = 0;
+    current_trap_stats.interrupt_count = 0;
+    current_trap_stats.interrupt_max_cycles = 0;
+    current_trap_stats.timer_count = 0;
+    current_trap_stats.timer_max_cycles = 0;
+    current_trap_stats.external_count = 0;
+    current_trap_stats.external_max_cycles = 0;
+    current_trap_stats.syscall_count = 0;
+    current_trap_stats.syscall_max_cycles = 0;
+    current_trap_stats.syscall_yield_count = 0;
+    current_trap_stats.syscall_yield_max_cycles = 0;
     printk("Trap vector installed\r\n");
 }
 
-static void handle_interrupt(struct trap_frame *frame, uint64_t code)
+void trap_stats_snapshot(struct trap_stats *stats)
 {
-    switch (code) {
-    case SCAUSE_SUPERVISOR_SOFTWARE_INTERRUPT:
-        trap_stop("Supervisor software interrupt", frame);
+    if (!stats)
+    {
         return;
+    }
+
+    stats->total_count = current_trap_stats.total_count;
+    stats->total_max_cycles = current_trap_stats.total_max_cycles;
+    stats->interrupt_count = current_trap_stats.interrupt_count;
+    stats->interrupt_max_cycles = current_trap_stats.interrupt_max_cycles;
+    stats->timer_count = current_trap_stats.timer_count;
+    stats->timer_max_cycles = current_trap_stats.timer_max_cycles;
+    stats->external_count = current_trap_stats.external_count;
+    stats->external_max_cycles = current_trap_stats.external_max_cycles;
+    stats->syscall_count = current_trap_stats.syscall_count;
+    stats->syscall_max_cycles = current_trap_stats.syscall_max_cycles;
+    stats->syscall_yield_count = current_trap_stats.syscall_yield_count;
+    stats->syscall_yield_max_cycles =
+        current_trap_stats.syscall_yield_max_cycles;
+}
+
+static struct trap_outcome handle_interrupt(struct trap_frame *frame,
+                                            uint64_t code)
+{
+    (void)frame;
+
+    switch (code)
+    {
+    case SCAUSE_SUPERVISOR_SOFTWARE_INTERRUPT:
+        return trap_fatal("Supervisor software interrupt");
     case SCAUSE_SUPERVISOR_TIMER_INTERRUPT:
         timer_handle_interrupt();
-        return;
+        return trap_handled();
     case SCAUSE_SUPERVISOR_EXTERNAL_INTERRUPT:
-        trap_stop("Supervisor external interrupt", frame);
-        return;
+        irq_handle_external();
+        return trap_handled();
     default:
         printk_field("interrupt_code", code);
-        trap_stop("Unknown interrupt", frame);
-        return;
+        return trap_fatal("Unknown interrupt");
     }
 }
 
-static void handle_exception(struct trap_frame *frame, uint64_t code)
+static struct trap_outcome handle_exception(struct trap_frame *frame,
+                                            uint64_t code)
 {
-    if (code == SCAUSE_BREAKPOINT) {
+    if (code == SCAUSE_BREAKPOINT)
+    {
         /*
-         * 当前只把 32-bit ebreak 当作调试断点处理，所以这里把 sepc 前进 4 字节。
-         * 如果以后允许压缩指令触发 c.ebreak，需要根据指令长度决定前进 2 还是 4。
+         * 当前只把 32-bit ebreak 当作调试断点处理，所以这里把 sepc 前进 4
+         * 字节。 如果以后允许压缩指令触发 c.ebreak，需要根据指令长度决定前进 2
+         * 还是 4。
          */
         print_trap_frame("Breakpoint exception", frame);
         frame->sepc += 4;
         printk("Breakpoint trap returned\r\n");
-        return;
+        return trap_handled();
     }
 
-    switch (code) {
+    switch (code)
+    {
     case SCAUSE_ILLEGAL_INSTRUCTION:
-        trap_stop("Illegal instruction exception", frame);
-        return;
+        return trap_fatal("Illegal instruction exception");
     case SCAUSE_LOAD_ACCESS_FAULT:
-        trap_stop("Load access fault", frame);
-        return;
+        return trap_fatal("Load access fault");
     case SCAUSE_STORE_ACCESS_FAULT:
-        trap_stop("Store access fault", frame);
-        return;
+        return trap_fatal("Store access fault");
     case SCAUSE_USER_ECALL:
-        trap_stop("User ecall reached before syscall init", frame);
-        return;
+        syscall_handle(frame);
+        return trap_handled();
     case SCAUSE_SUPERVISOR_ECALL:
-        trap_stop("Supervisor ecall reached before syscall init", frame);
-        return;
+        return trap_fatal("Supervisor ecall reached before syscall init");
     case SCAUSE_INST_PAGE_FAULT:
-        trap_stop("Instruction page fault", frame);
-        return;
+        return trap_fatal("Instruction page fault");
     case SCAUSE_LOAD_PAGE_FAULT:
-        trap_stop("Load page fault", frame);
-        return;
+        return trap_fatal("Load page fault");
     case SCAUSE_STORE_PAGE_FAULT:
-        trap_stop("Store page fault", frame);
-        return;
+        return trap_fatal("Store page fault");
     default:
         printk_field("exception_code", code);
-        trap_stop("Unknown exception", frame);
-        return;
+        return trap_fatal("Unknown exception");
     }
 }
 
-void trap_handle(struct trap_frame *frame)
+struct trap_frame *trap_handle(struct trap_frame *frame)
 {
+    uint64_t start_cycles = sbi_get_time();
     uint64_t code = frame->scause & SCAUSE_CODE_MASK;
+    uint64_t syscall_number = frame->a7;
+    int is_interrupt = (frame->scause & SCAUSE_INTERRUPT) != 0;
+    struct trap_outcome outcome;
 
-    if ((frame->scause & SCAUSE_INTERRUPT) != 0) {
-        handle_interrupt(frame, code);
-        return;
+    if (is_interrupt)
+    {
+        outcome = handle_interrupt(frame, code);
+    }
+    else
+    {
+        outcome = handle_exception(frame, code);
     }
 
-    handle_exception(frame, code);
+    if (outcome.result == TRAP_FATAL)
+    {
+        trap_stop(outcome.reason, frame);
+    }
+
+    uint64_t elapsed_cycles = sbi_get_time() - start_cycles;
+    update_trap_stat(&current_trap_stats.total_count,
+                     &current_trap_stats.total_max_cycles, elapsed_cycles);
+    if (is_interrupt)
+    {
+        update_trap_stat(&current_trap_stats.interrupt_count,
+                         &current_trap_stats.interrupt_max_cycles,
+                         elapsed_cycles);
+        if (code == SCAUSE_SUPERVISOR_TIMER_INTERRUPT)
+        {
+            update_trap_stat(&current_trap_stats.timer_count,
+                             &current_trap_stats.timer_max_cycles,
+                             elapsed_cycles);
+        }
+        else if (code == SCAUSE_SUPERVISOR_EXTERNAL_INTERRUPT)
+        {
+            update_trap_stat(&current_trap_stats.external_count,
+                             &current_trap_stats.external_max_cycles,
+                             elapsed_cycles);
+        }
+    }
+    else if (code == SCAUSE_USER_ECALL)
+    {
+        update_trap_stat(&current_trap_stats.syscall_count,
+                         &current_trap_stats.syscall_max_cycles,
+                         elapsed_cycles);
+        if (syscall_number == SYS_SCHED_YIELD)
+        {
+            update_trap_stat(&current_trap_stats.syscall_yield_count,
+                             &current_trap_stats.syscall_yield_max_cycles,
+                             elapsed_cycles);
+        }
+    }
+
+    console_drain_input();
+    return sched_from_trap(frame);
 }

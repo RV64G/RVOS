@@ -1,3 +1,4 @@
+#include "align.h"
 #include "early_log.h"
 #include "boot_memory.h"
 
@@ -25,11 +26,6 @@ struct efi_memory_descriptor {
 };
 
 static struct boot_memory_state state;
-
-static uint64_t align_up(uint64_t value, uint64_t align)
-{
-    return (value + align - 1) & ~(align - 1);
-}
 
 static uint64_t range_end(uint64_t start, uint64_t pages)
 {

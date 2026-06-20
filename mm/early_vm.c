@@ -9,6 +9,8 @@ extern char __kernel_text_start[];
 extern char __kernel_text_end[];
 extern char __kernel_rodata_start[];
 extern char __kernel_rodata_end[];
+extern char __initramfs_start[];
+extern char __initramfs_end[];
 extern char __kernel_data_start[];
 extern char __kernel_data_end[];
 extern char __kernel_bss_start[];
@@ -40,6 +42,18 @@ static int map_kernel_sections(void)
             &kernel_vm,
             (uint64_t)(uintptr_t)__kernel_rodata_start,
             (uint64_t)(__kernel_rodata_end - __kernel_rodata_start),
+            VM_MAP_READ)) {
+        return 0;
+    }
+
+    /*
+     * .initramfs 是内核 ELF 携带的只读启动文件包。S-mode 内核只需要查询其中的
+     * 用户程序，再交给 ELF loader 复制到用户地址空间。
+     */
+    if (!vm_identity_map(
+            &kernel_vm,
+            (uint64_t)(uintptr_t)__initramfs_start,
+            (uint64_t)(__initramfs_end - __initramfs_start),
             VM_MAP_READ)) {
         return 0;
     }

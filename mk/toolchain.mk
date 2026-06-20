@@ -20,6 +20,7 @@ GDB      ?= gdb
 
 CC_TARGET_FLAGS := --target=riscv64-unknown-elf
 LD_TARGET_FLAGS := --target=riscv64-unknown-elf -fuse-ld=lld
+CC_WARN_TOOLCHAIN :=
 else ifeq ($(TOOLCHAIN),gcc)
 ifndef CROSS_COMPILE
 CROSS_COMPILE := $(shell if command -v riscv64-unknown-elf-gcc >/dev/null 2>&1; then printf 'riscv64-unknown-elf-'; elif command -v riscv64-elf-gcc >/dev/null 2>&1; then printf 'riscv64-elf-'; else printf 'riscv64-unknown-elf-'; fi)
@@ -35,6 +36,7 @@ GDB      ?= riscv64-elf-gdb
 
 CC_TARGET_FLAGS :=
 LD_TARGET_FLAGS :=
+CC_WARN_TOOLCHAIN := -Wlogical-op
 else
 $(error Unsupported TOOLCHAIN '$(TOOLCHAIN)'; use TOOLCHAIN=gcc or TOOLCHAIN=clang)
 endif
@@ -64,7 +66,7 @@ CFLAGS_WARN_STRICT = \
 	-Werror \
 	-Wformat=2 \
 	-Wformat-security \
-	-Wlogical-op \
+	$(CC_WARN_TOOLCHAIN) \
 	-Wmissing-prototypes \
 	-Wstrict-prototypes \
 	-Wold-style-definition \

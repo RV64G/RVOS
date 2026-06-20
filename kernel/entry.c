@@ -1,14 +1,20 @@
 #include "boot_memory.h"
+#include "console.h"
 #include "dtb.h"
 #include "early_log.h"
 #include "early_vm.h"
+#include "irq.h"
 #include "kernel_boot_info.h"
 #include "kmalloc.h"
 #include "page_alloc.h"
 #include "platform.h"
 #include "printk.h"
+#include "csr.h"
+#include "selftest.h"
+#include "task.h"
 #include "timer.h"
 #include "trap.h"
+#include "user.h"
 
 /*
  * boot_info->flags 是一个 bitset。loader 只有在某类启动信息有效时才会置位，
@@ -59,6 +65,8 @@ static void print_boot_info(const struct kernel_boot_info *boot_info)
     early_print_field("kernel_stack_phys", boot_info->kernel_stack_phys);
     early_print_field("kernel_stack_size", boot_info->kernel_stack_size);
 }
+
+static struct task boot_task;
 
 static int validate_boot_info(const struct kernel_boot_info *boot_info)
 {
@@ -126,6 +134,12 @@ static int validate_boot_info(const struct kernel_boot_info *boot_info)
  */
 void kernel_entry(struct kernel_boot_info *boot_info)
 {
+    /*
+     * EFI loader 可能是在固件页表下跳进来的。等 PC 进入内核镜像后再清 satp，
+     * 可以避开“在 EFI 镜像里关闭分页后继续执行 EFI 指令”的固件差异。
+     */
+    csr_disable_mmu();
+
     sbi_console_puts("\r\nKernel ELF entered\r\n");
 
     if (!validate_boot_info(boot_info))
@@ -143,9 +157,22 @@ void kernel_entry(struct kernel_boot_info *boot_info)
     if (!platform_map_mmio())
         goto HALT;
     printk_init();
+    console_init();
     trap_init();
+    task_system_init(&boot_task, "boot");
     if (!timer_init())
         goto HALT;
+    if (!irq_init())
+        goto HALT;
+#ifdef KERNEL_SELFTEST
+    if (!kernel_selftest_run())
+        goto HALT;
+    printk("Kernel selftest passed\r\n");
+#else
+    if (!user_demo_run())
+        goto HALT;
+#endif
+    console_debug_loop();
 HALT:
     early_halt_forever();
 }

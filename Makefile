@@ -14,12 +14,16 @@ BUILD_DIR  = build
 TFTP_ROOT ?= /tmp/rvos-tftp
 TFTP_IFACE ?= enp55s0
 TFTP_HOST ?= 10.90.50.43
+QEMU_TEST_LOG ?= $(BUILD_DIR)/test/qemu-selftest.log
+QEMU_TEST_TIMEOUT ?= 90
+QEMU_TEST_MARKER ?= Kernel selftest passed
 
+include mk/user.mk
 include mk/kernel.mk
 include mk/efi.mk
 
 # --- Targets ---
-all: efi kernel
+all: efi kernel user-elf
 	@echo "Build completed successfully"
 	@echo "Default artifacts:"
 	@echo "  - $(EFI_BOOT_APP) : RISC-V UEFI application"
@@ -39,7 +43,7 @@ run: $(EFI_ESP_IMAGE) $(QEMU_EFI_VARS)
 	@$(QEMU) -M ? | grep virt >/dev/null || exit
 	@echo "Press Ctrl-A and then X to exit QEMU"
 	@echo "------------------------------------"
-	@$(QEMU) $(QEMU_EFI_QFLAGS)
+	@$(call qemu-run,$(EFI_ESP_IMAGE))
 
 # Print selected toolchain commands
 toolchain:
@@ -58,6 +62,25 @@ toolchain:
 check-undef: $(KERNEL_ELF)
 	@$(NM) -u $(KERNEL_ELF)
 
+check-selftest-undef: $(KERNEL_TEST_ELF)
+	@$(NM) -u $(KERNEL_TEST_ELF)
+
+test-build: efi-test-esp check-selftest-undef
+	@echo "Selftest build and link checks passed"
+
+test-qemu: $(EFI_TEST_ESP_IMAGE) $(QEMU_EFI_VARS)
+	@echo "Running QEMU kernel selftest..."
+	@sh scripts/qemu-wait-for-log.sh \
+		"$(QEMU_TEST_LOG)" \
+		"$(QEMU_TEST_TIMEOUT)" \
+		"$(QEMU_TEST_MARKER)" \
+		-- \
+		$(call qemu-run,$(EFI_TEST_ESP_IMAGE))
+	@echo "QEMU log: $(QEMU_TEST_LOG)"
+
+test: test-build test-qemu
+	@echo "All tests passed"
+
 # Generate clangd/IDE compile database.
 compile-commands:
 	@python3 scripts/gen-compile-commands.py \
@@ -65,7 +88,7 @@ compile-commands:
 		--directory "$(CURDIR)" \
 		--cc "$(CC)" \
 		--kernel-cflags '$(KERNEL_ELF_CFLAGS)' \
-		--kernel-sources '$(KERNEL_ELF_C_SRCS)' \
+		--kernel-sources '$(KERNEL_CLANGD_C_SRCS)' \
 		--efi-cflags '$(EFI_CFLAGS)' \
 		--efi-sources '$(EFI_APP_SRCS) $(EFI_RISCV_SRCS)'
 	@echo "Generated compile_commands.json"
@@ -96,7 +119,10 @@ wall:
 	@echo "This will treat warnings as errors and log output to wall_warnings.log"
 	@echo "-----------------------------------------------------------------------"
 	@$(MAKE) clean > /dev/null
-	@($(MAKE) -k all CFLAGS_WARN="$(CFLAGS_WARN_STRICT)" > wall_warnings.log 2>&1) || true
+	@$(MAKE) -k all CFLAGS_WARN="$(CFLAGS_WARN_STRICT)" > wall_warnings.log 2>&1 || { \
+		echo "Strict compilation failed. See wall_warnings.log"; \
+		exit 1; \
+	}
 	@echo "Strict compilation finished. Check wall_warnings.log for details."
 
-.PHONY: all clean run wall code txt toolchain check-undef compile-commands tftp-sync tftp-serve size
+.PHONY: all clean run wall code txt toolchain check-undef check-selftest-undef test-build test-qemu test compile-commands tftp-sync tftp-serve size
