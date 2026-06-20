@@ -8,6 +8,7 @@
 #include "page_alloc.h"
 #include "platform.h"
 #include "printk.h"
+#include "ramfs.h"
 #include "sched.h"
 #include "task.h"
 #include "timer.h"
@@ -27,8 +28,8 @@
 #define USER_IDLE_STACK_PAGES 2ULL
 #define USER_IDLE_STATUS_PERIOD_MS 2000ULL
 
-extern char __user_elf_start[];
-extern char __user_elf_end[];
+extern char __initramfs_start[];
+extern char __initramfs_end[];
 extern void riscv_enter_user(uint64_t entry, uint64_t stack_top,
                              uint64_t trap_stack_top, uint64_t arg0,
                              uint64_t arg1, uint64_t arg2, uint64_t arg3);
@@ -137,14 +138,19 @@ static void idle_status_timeout(struct timer_event *event, void *context)
 
 static int load_user_image(struct vm_space *space, uint64_t *entry)
 {
+    struct ramfs_file file;
+
     /*
-     * 当前还没有文件系统，用户 ELF 先作为内核镜像携带的 blob 存在。loader 仍按
-     * ELF header/program header 建立用户映射；后续接文件系统时只需要替换 blob
-     * 来源。
+     * 现在的 ramfs 只是启动期只读文件包，还不是正式文件系统。这里先用路径查出
+     * 用户 ELF，再复用同一个 ELF loader；后续 exec 只需要把路径变成 syscall 参数。
      */
-    return user_elf_load(space, __user_elf_start,
-                         (uint64_t)(__user_elf_end - __user_elf_start),
-                         entry);
+    if (!ramfs_lookup("/bin/hello", &file))
+    {
+        printk("User ELF not found in initramfs\r\n");
+        return 0;
+    }
+
+    return user_elf_load(space, file.data, file.size, entry);
 }
 
 static void user_task_entry(void *arg)
@@ -296,6 +302,12 @@ static int create_idle_task(void)
 
 int user_demo_run(void)
 {
+    if (!ramfs_init(__initramfs_start,
+                    (uint64_t)(__initramfs_end - __initramfs_start)))
+    {
+        return 0;
+    }
+
     if (!create_one_user_task(0, "user-a", 300, 1000, 0))
     {
         return 0;

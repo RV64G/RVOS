@@ -2,8 +2,9 @@
 
 USER_BUILD_DIR := $(BUILD_DIR)/user
 USER_ELF       := $(USER_BUILD_DIR)/hello.elf
-USER_BLOB_S    := $(USER_BUILD_DIR)/hello_blob.S
-USER_BLOB_O    := $(USER_BUILD_DIR)/hello_blob.o
+USER_INITRAMFS := $(USER_BUILD_DIR)/initramfs.img
+USER_BLOB_S    := $(USER_BUILD_DIR)/initramfs_blob.S
+USER_BLOB_O    := $(USER_BUILD_DIR)/initramfs_blob.o
 
 USER_CFLAGS = \
 	$(CC_TARGET_FLAGS) \
@@ -35,21 +36,31 @@ $(USER_ELF): $(USER_BUILD_DIR)/hello.o user/user.lds
 	@mkdir -p $(dir $@)
 	$(CC) $(USER_LDFLAGS) $(USER_BUILD_DIR)/hello.o -o $@
 
-$(USER_BLOB_S): $(USER_ELF)
+$(USER_INITRAMFS): $(USER_ELF) scripts/build-initramfs.py
 	@mkdir -p $(dir $@)
-	@printf '.section .user_elf, "a"\n' > $@
-	@printf '.globl __user_elf_start\n' >> $@
-	@printf '.globl __user_elf_end\n' >> $@
-	@printf '.balign 8\n' >> $@
-	@printf '__user_elf_start:\n' >> $@
-	@printf '.incbin "$(USER_ELF)"\n' >> $@
-	@printf '__user_elf_end:\n' >> $@
+	python3 scripts/build-initramfs.py \
+		--output $@ \
+		--file /bin/hello=$(USER_ELF)
+
+$(USER_BLOB_S): $(USER_INITRAMFS) mk/user.mk
+	@mkdir -p $(dir $@)
+	@{ \
+		printf '.section .initramfs, "a"\n'; \
+		printf '.globl __initramfs_start\n'; \
+		printf '.globl __initramfs_end\n'; \
+		printf '.balign 8\n'; \
+		printf '__initramfs_start:\n'; \
+		printf '.incbin "$(USER_INITRAMFS)"\n'; \
+		printf '__initramfs_end:\n'; \
+	} > $@.tmp
+	mv $@.tmp $@
 
 $(USER_BLOB_O): $(USER_BLOB_S)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS_BASE) $(INCLUDES) -MMD -MP -c $< -o $@
 
-user-elf: $(USER_ELF)
+user-elf: $(USER_ELF) $(USER_INITRAMFS)
 	@echo "User ELF generated: $(USER_ELF)"
+	@echo "Initramfs generated: $(USER_INITRAMFS)"
 
 .PHONY: user-elf

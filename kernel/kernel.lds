@@ -30,8 +30,8 @@ SECTIONS
     __kernel_rodata_end = .;
 
     . = ALIGN(0x1000);
-    .user_elf : {
-        KEEP(*(.user_elf))
+    .initramfs : {
+        KEEP(*(.initramfs))
     }
 
     . = ALIGN(0x1000);

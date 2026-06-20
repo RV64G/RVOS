@@ -54,21 +54,54 @@ trap_vector()
   -> sret
 ```
 
-## 内嵌用户 ELF
+## initramfs 与用户 ELF
 
-当前还没有文件系统，所以用户程序先作为独立 ELF 构建，再作为 blob 嵌进 kernel ELF：
+当前还没有磁盘文件系统，所以用户程序先作为独立 ELF 构建，再打包进一个最小
+initramfs，最后作为 blob 嵌进 kernel ELF：
 
 ```text
 user/hello.S
   -> build/user/hello.elf
-  -> build/user/hello_blob.S
-  -> build/user/hello_blob.o
-  -> kernel ELF 的 .user_elf section
+  -> build/user/initramfs.img
+  -> build/user/initramfs_blob.S
+  -> build/user/initramfs_blob.o
+  -> kernel ELF 的 .initramfs section
 ```
 
-`.user_elf` 只是一段只读数据，供内核中的 `user_elf_load()` 读取。它本身不会直接映射
-成用户代码页；真正进入用户态前，loader 会解析 ELF header 和 program header，把
-`PT_LOAD` 描述的内容复制到新申请的物理页，再映射进目标 task 的用户页表。
+`.initramfs` 只是一段只读启动文件包。`ramfs_init()` 会校验 header，`ramfs_lookup()`
+按绝对路径找到文件内容；它没有目录树、写入、删除、权限和块缓存，作用只是让内核不再
+直接依赖某一个内嵌 ELF 符号。
+
+镜像格式保持得很小：
+
+```text
+ramfs_header
+  magic       : "RVOSRAM\0"
+  version     : 当前为 1
+  header_size : 文件表从哪里开始
+  file_count  : 文件数量
+
+ramfs_entry[file_count]
+  path_offset/path_size : 路径字符串在镜像内的位置和长度
+  data_offset/data_size : 文件内容在镜像内的位置和长度
+  flags                 : 预留给后续文件属性
+
+path bytes
+file data bytes
+```
+
+这里全部使用“相对镜像起点的 offset”，不用指针。原因是 `.initramfs` 会被链接器放进
+kernel ELF，最终物理地址由内核镜像位置决定；offset 格式不关心镜像被放在哪里。
+
+当前用户 demo 查询：
+
+```text
+/bin/hello
+```
+
+查到文件后，`user_elf_load()` 会解析 ELF header 和 program header，把 `PT_LOAD`
+描述的内容复制到新申请的物理页，再映射进目标 task 的用户页表。也就是说，initramfs
+负责“从哪里取文件”，ELF loader 负责“怎么把文件变成可执行地址空间”。
 
 当前 loader 只支持这条最小路径：
 
