@@ -24,4 +24,26 @@ int uart_ready(void);
  */
 void uart_putchar(int ch);
 
+/**
+ * 尝试通过 UART 异步输出一段缓冲区。
+ *
+ * 数据会先进入内核 TX ring buffer，再由 UART THR-empty 中断继续发送。函数返回 1
+ * 表示缓冲区内容已经全部交给 UART 后端；返回 0 表示 UART 还不可用，调用者应退回
+ * SBI 等早期输出路径。
+ */
+int uart_write(const char *s, uint64_t len);
+
+/**
+ * 开启 ns16550 中断输出/输入。
+ */
+void uart_enable_interrupts(void);
+
+/**
+ * 处理 UART 中断。
+ *
+ * RX 方向把已经到达的字符读入 console input buffer；TX 方向把 TX ring buffer 中
+ * 的字符继续写入 THR。
+ */
+void uart_handle_interrupt(void);
+
 #endif

@@ -18,14 +18,11 @@ jobs:
     - name: Install host dependencies
       run: ./scripts/install-deps-ubuntu.sh
 
-    - name: Build default EFI application
-      run: make all
+    - name: Run kernel selftest
+      run: make test
 
-    - name: Check kernel undefined symbols
-      run: make check-undef
-
-    - name: Build EFI system partition image
-      run: make efi-esp
+    - name: Build default EFI artifacts
+      run: make all efi-esp
 
     - name: Upload EFI artifact
       uses: actions/upload-artifact@v4
@@ -34,4 +31,15 @@ jobs:
         path: |
           build/efi/BOOTRISCV64.EFI
           build/kernel/kernel.elf
+          build/efi/esp.img
+        if-no-files-found: error
+
+    - name: Upload selftest artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: rvos-selftest-artifacts
+        path: |
+          build/test/kernel/kernel.elf
+          build/test/esp.img
+          build/test/qemu-selftest.log
         if-no-files-found: error

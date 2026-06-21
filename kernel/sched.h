@@ -1,0 +1,61 @@
+#ifndef KERNEL_SCHED_H
+#define KERNEL_SCHED_H
+
+struct trap_frame;
+struct task;
+
+/**
+ * 初始化调度器，把 boot task 作为当前正在运行的 task。
+ */
+void sched_init(struct task *boot_task);
+
+/**
+ * 清空调度器全局状态。
+ *
+ * 只供 selftest 清理临时 task 使用；正式内核初始化后不会 reset scheduler。
+ */
+void sched_reset(void);
+
+/**
+ * 把 READY task 放入运行队列。
+ */
+void sched_enqueue(struct task *task);
+
+/**
+ * 设置当前 hart 的 idle task。
+ *
+ * idle task 不参与普通 READY 队列；只有没有其它 READY task 时，scheduler 才会
+ * 返回 idle task 作为兜底执行流。
+ */
+void sched_set_idle_task(struct task *task);
+
+/**
+ * 从 boot task 启动第一个 READY task，但不把 boot task 放回运行队列。
+ *
+ * 用户态 demo 使用这个入口把 CPU 交给调度器；后续没有 wait/reaper 前，boot task
+ * 不参与用户 task 的 trap-frame 调度。
+ */
+void sched_start_first(void);
+
+/**
+ * 主动让出 CPU。
+ *
+ * 这是内核 task 的协作式调度入口，底层走 context_switch()。
+ */
+void sched_yield(void);
+
+/**
+ * 请求在 trap 返回前调度。
+ */
+void sched_request_reschedule(void);
+
+/**
+ * trap 返回路径上的调度入口。
+ *
+ * 返回 trap.S 应该恢复的 trap_frame。
+ */
+struct trap_frame *sched_from_trap(struct trap_frame *frame);
+
+struct task *sched_current(void);
+
+#endif

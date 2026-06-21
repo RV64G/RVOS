@@ -22,6 +22,12 @@
 - [06 第一张 Sv39 页表](boot/06-first-page-table.md)
 - [07 内存接口](boot/07-memory-interfaces.md)
 - [08 平台 MMIO 与 UART 输出](boot/08-platform-init.md)
+- [09 Trap 入口与返回](boot/09-trap-entry.md)
+- [10 SBI Timer 与 Timer List](boot/10-sbi-timer.md)
+- [11 内核 Task 与上下文切换](boot/11-kernel-task.md)
+- [12 IRQ 与串口输入](boot/12-irq-console-input.md)
+- [13 Spinlock 与中断状态](boot/13-spinlock.md)
+- [14 Syscall 与最小用户态](boot/14-syscall-and-user.md)
 
 ## 后续专题
 

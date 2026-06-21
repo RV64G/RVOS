@@ -1,6 +1,8 @@
 #include "kmalloc.h"
 
+#include "align.h"
 #include "page_alloc.h"
+#include "string.h"
 
 #define KMALLOC_PAGE_SIZE 4096ULL
 
@@ -30,20 +32,6 @@ typedef struct heap_header
 
 static Header base;
 static Header *free_list;
-
-static uint64_t align_up(uint64_t value, uint64_t align)
-{
-    return (value + align - 1) & ~(align - 1);
-}
-
-static void zero_bytes(void *ptr, uint64_t size)
-{
-    uint8_t *bytes = (uint8_t *)ptr;
-    for (uint64_t i = 0; i < size; i++)
-    {
-        bytes[i] = 0;
-    }
-}
 
 void kmalloc_init(void)
 {
@@ -203,7 +191,7 @@ void *kzalloc(uint64_t size)
     void *ptr = kmalloc(size);
     if (ptr)
     {
-        zero_bytes(ptr, size);
+        memzero(ptr, size);
     }
     return ptr;
 }

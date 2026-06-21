@@ -20,15 +20,50 @@ trap_vector
         -> timer_handle_interrupt()
            -> timer_run_due_events()：按 rdtime cycles 处理已经到期的 timer event。
            -> sbi_set_timer(deadline)：设置下一次硬件 timer interrupt。
+        -> sched_from_trap(frame)：如果 timer 回调请求调度，切换返回现场。
 ```
 
 ## timebase_frequency
 
-`timebase_frequency` 来自 DTB，表示 `rdtime` 每秒增长多少次。QEMU virt 常见值是
-`10000000`，也就是 10MHz。
+`timebase_frequency` 来自 DTB，表示 `rdtime` 每秒增长多少次。它是平台数据，不能
+在内核里写死。
 
-timer list 会把上层传入的毫秒值换算成 `rdtime` cycles。比如 timebase 是 10MHz 时，
-1000ms 就是 10,000,000 cycles。
+timer list 会根据这个频率把上层传入的毫秒值换算成 `rdtime` cycles。
+
+## Timer 和 PLIC 的区别
+
+SBI timer 不走 PLIC。PLIC 负责的是外部设备中断，比如 UART、网卡、块设备；timer
+interrupt 是 hart 自己的 supervisor timer interrupt。
+
+因此 timer 不需要这些步骤：
+
+```text
+priority[source]
+enable[context][source]
+claim()
+complete()
+```
+
+timer 初始化只需要两层开关：
+
+```text
+sbi_set_timer(deadline) : 通过 SBI 请求下一次 timer interrupt 的 rdtime deadline
+sie.STIE                : 允许当前 hart 接收 supervisor timer interrupt
+sstatus.SIE             : 打开当前 hart 的 S-mode 全局中断
+```
+
+timer interrupt 到来后，`scause` 直接告诉 trap 层“这是 supervisor timer interrupt”，
+所以 `handle_interrupt()` 可以直接调用 `timer_handle_interrupt()`。它不需要像 PLIC
+那样先 claim 一个 source id，因为 timer interrupt 的来源就是当前 hart 的 timer。
+
+多核时 timer 仍然需要按 hart 初始化，但原因和 PLIC 不一样：
+
+- 每个会运行调度器的 hart 都要有自己的 timer deadline。
+- 每个 hart 都要打开自己的 `sie.STIE`。
+- 每个 hart 的 timer interrupt 只驱动本 hart 上的调度或 timer list 处理。
+
+如果后续只让 boot hart 跑内核，其它 hart park 在 `wfi`，那就只需要 boot hart 初始化
+timer。等真正做 SMP 调度时，再给每个在线 hart 建立各自的 timer/scheduler 状态。
 
 ## 外部 timer
 
@@ -44,6 +79,10 @@ some_timer:
 后续如果需要调试输出、自测事件、sleep、IO timeout 或调度时间片，都应该通过这套接口
 注册。debug/test 怎么组织单独讨论，不放进 timer 核心。
 
+现在 task 自检已经用这套接口注册了一个 1ms 周期事件。这个事件的回调只调用
+`sched_request_reschedule()`，不直接切换 task。真正的切换发生在 `trap_handle()` 即将
+返回时，因为那时当前执行流的寄存器已经完整保存在 `trap_frame` 里。
+
 ## cycles 和 timer event
 
 当前 timer 子系统只用一种时间判断事件到期：
@@ -53,9 +92,9 @@ rdtime cycles:
   硬件单调时间。timer list、sleep、timeout 使用它判断是否到期。
 ```
 
-调度 tick 暂时不做。以后做 RR 时间片时，可以由调度器注册一个周期 timer，或者在调度
-模块里单独维护 tick 计数。但 sleep、timeout、周期任务仍应该继续使用 `rdtime` cycles，
-避免把“内核处理过多少次调度节拍”和“真实时间过去多少”混在一起。
+调度 tick 不内置在 timer core 里。做 RR 时间片时，由 task/scheduler 模块注册周期
+timer，并在回调里请求调度。但 sleep、timeout、周期任务仍应该继续使用 `rdtime`
+cycles，避免把“内核处理过多少次调度节拍”和“真实时间过去多少”混在一起。
 
 硬件 timer 只有一个下一次 deadline，所以每次重新编程时直接使用 timer list 头节点的
 `deadline_cycles`：
@@ -160,3 +199,24 @@ timer 子系统不在 `timer_schedule_ms()` 里偷偷 `kmalloc()`，也不会在
 当前回调仍然直接在 timer interrupt 里运行，所以回调必须很短，不能长时间打印、等待
 锁、阻塞或者做复杂工作。等调度器和软中断/工作队列成形后，可以把耗时逻辑从硬中断
 路径里移出去。
+
+这也是调度回调只置位的原因：timer list 正在遍历到期事件，如果在回调里直接
+`context_switch()`，会把 timer core 的内部状态和当前 task 的中断现场混在一起。先置位，
+再由 trap 返回路径统一切换，边界更清楚。
+
+## 自检
+
+`KERNEL_SELFTEST` 构建会先注册一个 1ms 一次性 timer event，确认它只触发一次；再注册
+一个 1ms 周期 timer event。自检主线用 `wfi` 等待 timer interrupt，回调只递增一个
+计数器，不打印、不分配内存。周期事件计数达到目标后取消，再短暂轮询确认取消后不会
+继续触发。
+
+这条测试覆盖：
+
+- `timer_schedule_ms()` 的毫秒到 cycles 换算和插入链表；
+- supervisor timer interrupt 进入统一 trap 入口；
+- `trap_handle()` 分发到 `timer_handle_interrupt()`；
+- 一次性 timer 触发后不再留在链表中；
+- 周期 timer 重新插入；
+- `timer_cancel()` 从 timer list 移除事件。
+- task 层注册周期 timer 请求调度，trap 返回路径恢复另一个 task 的 `trap_frame`。
